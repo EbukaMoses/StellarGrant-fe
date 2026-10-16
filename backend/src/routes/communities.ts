@@ -8,12 +8,14 @@ import { Activity } from "../entities/Activity";
 import {
   validateBody,
   validateParams,
+  validateQuery,
   validateRequest,
 } from "../middlewares/validation-middleware";
 import {
   communityCreateSchema,
   communityUpdateSchema,
   idParamSchema,
+  paginationSchema,
 } from "../schemas";
 import {
   createRbacMiddleware,
@@ -119,10 +121,6 @@ export const buildCommunitiesRouter = (
           res.status(403).json({ error: "Community admin privileges required" });
           return;
         }
-            .status(403)
-            .json({ error: "Community admin privileges required" });
-          return;
-        }
 
         const payload = (req as any).validatedBody;
         if (payload.description !== undefined) {
@@ -153,9 +151,11 @@ export const buildCommunitiesRouter = (
   router.get(
     "/:id/grants",
     validateParams(idParamSchema),
+    validateQuery(paginationSchema),
     async (req, res, next) => {
       try {
         const { id } = (req as any).validatedParams;
+        const { page, limit } = (req as any).validatedQuery;
 
         const community = await communityRepo.findOne({ where: { id } });
         if (!community) {
@@ -163,9 +163,11 @@ export const buildCommunitiesRouter = (
           return;
         }
 
-        const grants = await grantRepo.find({
+        const [grants, total] = await grantRepo.findAndCount({
           where: { communityId: id },
           order: { updatedAt: "DESC" },
+          skip: (page - 1) * limit,
+          take: limit,
         });
 
         const grantIds = grants.map((grant) => grant.id);
@@ -180,7 +182,17 @@ export const buildCommunitiesRouter = (
             })
           : [];
 
-        res.json({ data: grants, community, activity });
+        res.json({
+          data: grants,
+          community,
+          activity,
+          meta: {
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit),
+          },
+        });
       } catch (error) {
         next(error);
       }
