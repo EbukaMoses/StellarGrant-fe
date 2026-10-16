@@ -6,7 +6,7 @@
  * callers never receive silent `undefined` or `null` for required fields.
  */
 
-import { xdr } from "@stellar/stellar-sdk";
+import { xdr, Address } from "@stellar/stellar-sdk";
 
 export function decodeU64(val: xdr.ScVal): number {
   if (val.switch() !== xdr.ScValType.scvU64()) {
@@ -48,7 +48,9 @@ export function decodeAddress(val: xdr.ScVal): string {
   if (val.switch() !== xdr.ScValType.scvAddress()) {
     throw new Error(`Expected scvAddress, got ${val.switch().name}`);
   }
-  return val.address().toString();
+  // #1243 — Address.fromScVal returns a proper strkey (G.../C...),
+  // unlike val.address().toString() which returns "[object Object]".
+  return Address.fromScVal(val).toString();
 }
 
 export function decodeBool(val: xdr.ScVal): boolean {

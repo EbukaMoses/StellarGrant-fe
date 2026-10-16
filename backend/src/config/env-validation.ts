@@ -21,7 +21,7 @@ const ENV_VARS: EnvVarConfig[] = [
   },
   {
     name: "DATABASE_URL",
-    required: false,
+    required: true,
     defaultValue: "postgres://postgres:postgres@localhost:5432/stellargrant",
     description: "PostgreSQL database connection string",
   },
@@ -30,6 +30,27 @@ const ENV_VARS: EnvVarConfig[] = [
     required: false,
     defaultValue: "development",
     description: "Application environment (development, production, test)",
+  },
+  // #1242 — genuinely required vars must actually fail validation
+  {
+    name: "JWT_SECRET",
+    required: true,
+    description: "Secret key for signing JWTs",
+  },
+  {
+    name: "CONTRACT_ID",
+    required: true,
+    description: "Stellar contract ID",
+  },
+  {
+    name: "RPC_URL",
+    required: true,
+    description: "Stellar RPC endpoint",
+  },
+  {
+    name: "NETWORK_PASSPHRASE",
+    required: true,
+    description: "Stellar network passphrase",
   },
 ];
 
