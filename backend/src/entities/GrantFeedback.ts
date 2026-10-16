@@ -22,6 +22,10 @@ export class GrantFeedback {
   @Column({ type: "text", nullable: true })
   comment!: string | null;
 
+  /** Signed-intent nonce, retained for audit (#1239). */
+  @Column({ type: "varchar", length: 120, nullable: true })
+  nonce!: string | null;
+
   @CreateDateColumn()
   createdAt!: Date;
 }

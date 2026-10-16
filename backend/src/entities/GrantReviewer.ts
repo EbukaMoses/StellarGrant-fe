@@ -1,7 +1,8 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Unique } from "typeorm";
 import { Grant } from "./Grant";
 
 @Entity({ name: "grant_reviewers" })
+@Unique(["grantId", "reviewerStellarAddress"])
 export class GrantReviewer {
   @PrimaryGeneratedColumn()
   id!: number;

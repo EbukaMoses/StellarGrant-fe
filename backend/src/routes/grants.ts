@@ -79,6 +79,7 @@ export const buildGrantRouter = (
   activityRepo: Repository<Activity>,
   reviewerRepo: Repository<GrantReviewer>,
   responseCache: ResponseCacheService,
+  nonceService?: import("../services/nonce-service").NonceService,
 ) => {
   const router = Router();
 
@@ -362,6 +363,11 @@ export const buildGrantRouter = (
         return;
       }
 
+      // Explicit replay protection (#1239).
+      if (nonceService) {
+        await nonceService.consume(payload.nonce);
+      }
+
       let isAuthorized = false;
       if (payload.role === "recipient") {
         isAuthorized = (grant.recipient === payload.address);
@@ -406,6 +412,7 @@ export const buildGrantRouter = (
         role: payload.role,
         rating: payload.rating,
         comment: payload.comment ?? null,
+        nonce: payload.nonce,
       });
 
       const cacheKey = responseCacheKeys.grantFeedback(id);
@@ -413,6 +420,10 @@ export const buildGrantRouter = (
 
       res.status(201).json({ data: feedback });
     } catch (error: any) {
+      if (error?.name === "NonceReplayError") {
+        res.status(409).json({ error: "Signature nonce has already been used" });
+        return;
+      }
       if (error?.code === "23505" || error?.code === "SQLITE_CONSTRAINT") {
         const existing = await feedbackRepo.findOne({
           where: { grantId: id, reviewerAddress: req.body.address },

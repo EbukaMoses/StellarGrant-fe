@@ -28,6 +28,16 @@ export type FeedbackIntent = {
   signature: string;
 };
 
+/** Signed intent for grant-owner actions such as adding a reviewer (#1238). */
+export type AddReviewerIntent = {
+  grantId: number;
+  reviewerStellarAddress: string;
+  address: string;
+  nonce: string;
+  timestamp: number;
+  signature: string;
+};
+
 export class SignatureService {
   buildIntentMessage(payload: Omit<MilestoneProofIntent, "signature">): string {
     return [
@@ -61,6 +71,29 @@ export class SignatureService {
       payload.nonce,
       payload.timestamp,
     ].join("|");
+  }
+
+  buildAddReviewerIntentMessage(payload: Omit<AddReviewerIntent, "signature">): string {
+    return [
+      "stellargrant:add_reviewer:v1",
+      payload.grantId,
+      payload.reviewerStellarAddress,
+      payload.address,
+      payload.nonce,
+      payload.timestamp,
+    ].join("|");
+  }
+
+  verifyAddReviewer(payload: AddReviewerIntent): boolean {
+    if (!StrKey.isValidEd25519PublicKey(payload.address)) {
+      return false;
+    }
+    const keypair = Keypair.fromPublicKey(payload.address);
+    const message = this.buildAddReviewerIntentMessage(payload);
+    return keypair.verify(
+      Buffer.from(message, "utf8"),
+      Buffer.from(payload.signature, "base64"),
+    );
   }
 
   verify(payload: MilestoneProofIntent | FeedbackIntent): boolean {

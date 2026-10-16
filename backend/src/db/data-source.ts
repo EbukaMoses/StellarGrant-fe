@@ -26,6 +26,7 @@ import { UserWatchlist } from "../entities/UserWatchlist";
 import { WebhookDeliveryLog } from "../entities/WebhookDeliveryLog";
 import { WebhookSubscription } from "../entities/WebhookSubscription";
 import { GrantFeedback } from "../entities/GrantFeedback";
+import { UsedNonce } from "../entities/UsedNonce";
 
 const entities = [
   Activity,
@@ -51,6 +52,7 @@ const entities = [
   User,
   UserRole,
   UserWatchlist,
+  UsedNonce,
   WebhookDeliveryLog,
   WebhookSubscription,
 ];

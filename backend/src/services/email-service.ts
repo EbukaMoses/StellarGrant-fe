@@ -1,3 +1,17 @@
+/**
+ * Escape text for safe interpolation into HTML email bodies (#1237).
+ * User-supplied grant/milestone titles are rendered as literal text.
+ */
+export function escapeHtml(value: unknown): string {
+  const s = value == null ? "" : String(value);
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 import sgMail from '@sendgrid/mail';
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
@@ -26,45 +40,55 @@ interface EmailTemplate {
 
 export function getEmailTemplate(type: EmailType, data: Record<string, any>): EmailTemplate {
   const base = process.env.FRONTEND_URL || "http://localhost:3000";
+  const grantTitle = escapeHtml(data.grantTitle);
+  const milestoneTitle = escapeHtml(data.milestoneTitle);
+  const milestoneIdx = escapeHtml(data.milestoneIdx);
+  const grantId = escapeHtml(data.grantId);
+  const amount = escapeHtml(data.amount);
+  const deadline = escapeHtml(data.deadline);
+  const daysRemaining = escapeHtml(data.daysRemaining);
+  const milestoneLabel = milestoneTitle || `#${milestoneIdx}`;
+  const grantLabel = grantTitle || `Grant #${grantId}`;
+
   switch (type) {
     case 'milestone_approved':
       return {
-        subject: `Milestone Approved: ${data.grantTitle}`,
-        html: `<p>Congratulations! Your milestone <b>${data.milestoneTitle}</b> for grant <b>${data.grantTitle}</b> has been approved.</p>`
+        subject: `Milestone Approved: ${escapeHtml(data.grantTitle)}`,
+        html: `<p>Congratulations! Your milestone <b>${milestoneTitle}</b> for grant <b>${grantTitle}</b> has been approved.</p>`
       };
     case 'milestone_submitted':
       return {
-        subject: `New Milestone Submission: ${data.grantTitle}`,
-        html: `<p>A new milestone <b>${data.milestoneTitle}</b> has been submitted for grant <b>${data.grantTitle}</b>. Please review it.</p>`
+        subject: `New Milestone Submission: ${escapeHtml(data.grantTitle)}`,
+        html: `<p>A new milestone <b>${milestoneTitle}</b> has been submitted for grant <b>${grantTitle}</b>. Please review it.</p>`
       };
     case 'milestone_rejected':
       return {
-        subject: `Milestone Rejected: ${data.grantTitle}`,
-        html: `<p>Your milestone <b>${data.milestoneTitle}</b> for grant <b>${data.grantTitle}</b> has been rejected.</p>`
+        subject: `Milestone Rejected: ${escapeHtml(data.grantTitle)}`,
+        html: `<p>Your milestone <b>${milestoneTitle}</b> for grant <b>${grantTitle}</b> has been rejected.</p>`
       };
     case 'grant_funded':
       return {
-        subject: `Grant Funded: ${data.grantTitle}`,
-        html: `<p>Your grant <b>${data.grantTitle}</b> has been funded with ${data.amount}.</p>`
+        subject: `Grant Funded: ${escapeHtml(data.grantTitle)}`,
+        html: `<p>Your grant <b>${grantTitle}</b> has been funded with ${amount}.</p>`
       };
     case 'grant_created':
       return {
-        subject: `Grant Created: ${data.grantTitle}`,
-        html: `<p>A new grant <b>${data.grantTitle}</b> has been created.</p>`
+        subject: `Grant Created: ${escapeHtml(data.grantTitle)}`,
+        html: `<p>A new grant <b>${grantTitle}</b> has been created.</p>`
       };
     case 'milestone_deadline_upcoming':
       return {
-        subject: `[StellarGrant] Milestone due in ${data.daysRemaining} day${Number(data.daysRemaining) === 1 ? "" : "s"} — Grant #${data.grantId}`,
-        html: `<p>Your milestone <strong>${data.milestoneTitle ?? `#${data.milestoneIdx}`}</strong> for <strong>${data.grantTitle ?? `Grant #${data.grantId}`}</strong> is due in <strong>${data.daysRemaining} day${Number(data.daysRemaining) === 1 ? "" : "s"}</strong>.</p>
-               <p>Deadline: <code>${data.deadline}</code></p>
-               <p><a href="${base}/grants/${data.grantId}/milestones">Open milestone dashboard</a></p>`
+        subject: `[StellarGrant] Milestone due in ${escapeHtml(data.daysRemaining)} day${Number(data.daysRemaining) === 1 ? "" : "s"} — Grant #${grantId}`,
+        html: `<p>Your milestone <strong>${milestoneLabel}</strong> for <strong>${grantLabel}</strong> is due in <strong>${daysRemaining} day${Number(data.daysRemaining) === 1 ? "" : "s"}</strong>.</p>
+               <p>Deadline: <code>${deadline}</code></p>
+               <p><a href="${base}/grants/${grantId}/milestones">Open milestone dashboard</a></p>`
       };
     case 'milestone_deadline_overdue':
       return {
-        subject: `[StellarGrant] Milestone overdue — Grant #${data.grantId}`,
-        html: `<p>Your milestone <strong>${data.milestoneTitle ?? `#${data.milestoneIdx}`}</strong> for <strong>${data.grantTitle ?? `Grant #${data.grantId}`}</strong> is now <strong>overdue</strong>.</p>
-               <p>Deadline: <code>${data.deadline}</code></p>
-               <p><a href="${base}/grants/${data.grantId}/milestones">Review milestone</a></p>`
+        subject: `[StellarGrant] Milestone overdue — Grant #${grantId}`,
+        html: `<p>Your milestone <strong>${milestoneLabel}</strong> for <strong>${grantLabel}</strong> is now <strong>overdue</strong>.</p>
+               <p>Deadline: <code>${deadline}</code></p>
+               <p><a href="${base}/grants/${grantId}/milestones">Review milestone</a></p>`
       };
     default:
       throw new Error(`Unknown email type: ${type}`);
