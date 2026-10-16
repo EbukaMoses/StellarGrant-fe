@@ -2,7 +2,6 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { stellarExplorerTx } from "@/lib/constants";
 import { toast } from "@/lib/toast";
 import { useWalletStore } from "@/lib/store/walletStore";
 import { getHorizonClient } from "@/lib/stellar/client";
@@ -92,7 +91,7 @@ export function useFundGrant(): UseFundGrantReturn {
   }, [address]);
 
   const fund = useCallback(
-    async (params: FundGrantParams): Promise<FundGrantResult> => {
+    async (_params: FundGrantParams): Promise<FundGrantResult> => {
       if (!address) {
         const errMsg = "Wallet not connected";
         setError(errMsg);

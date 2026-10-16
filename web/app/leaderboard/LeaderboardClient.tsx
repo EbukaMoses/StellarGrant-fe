@@ -43,8 +43,9 @@ async function searchFullLeaderboard(
   let totalPages = 1;
 
   while (currentPage <= totalPages && currentPage <= SEARCH_MAX_PAGES) {
+    // Same-origin proxy — never hit NEXT_PUBLIC_API_URL from the browser.
     const res = await fetch(
-      `${API_URL}/leaderboard?page=${currentPage}&limit=${LEADERBOARD_PAGE_SIZE}`,
+      `/api/leaderboard?page=${currentPage}&limit=${LEADERBOARD_PAGE_SIZE}`,
       { signal }
     );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);

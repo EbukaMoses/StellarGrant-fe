@@ -34,9 +34,23 @@ interface UseGrantResult {
 
 const hookLogger = logger.child("useGrant");
 
+/**
+ * Thrown instead of calling `notFound()` directly inside `queryFn`: TanStack
+ * Query catches anything `queryFn` throws and stores it on `query.error`
+ * rather than letting it propagate, so `notFound()`'s special digest error
+ * never reaches Next's render-time error boundary from there. We classify
+ * this error and call `notFound()` from the hook body instead (see below).
+ */
+class GrantNotFoundError extends Error {
+  constructor(grantId: string) {
+    super(`Grant not found: ${grantId}`);
+    this.name = "GrantNotFoundError";
+  }
+}
+
 async function fetchGrantDetail(grantId: string): Promise<GrantDetailData> {
   const res = await fetch(`/api/grants/${grantId}`);
-  if (res.status === 404) notFound();
+  if (res.status === 404) throw new GrantNotFoundError(grantId);
   if (!res.ok) throw new Error(`Failed to fetch grant ${grantId}: ${res.status}`);
 
   const json = (await res.json()) as {
@@ -66,7 +80,8 @@ async function fetchGrantDetail(grantId: string): Promise<GrantDetailData> {
   };
 }
 
-function classifyError(err: Error): "network" | "api" | "rpc" | "generic" {
+function classifyError(err: Error): "network" | "api" | "rpc" | "notFound" | "generic" {
+  if (err instanceof GrantNotFoundError) return "notFound";
   if (err.message.includes("Failed to fetch") || (typeof navigator !== "undefined" && !navigator.onLine)) {
     return "network";
   }
@@ -92,11 +107,20 @@ export function useGrant(grantId: string, options?: UseGrantOptions): UseGrantRe
   // Prefetch on hover support: expose queryClient.prefetchQuery for GrantCard
   void queryClient; // used by callers via useQueryClient directly
 
+  const errorType = error ? classifyError(error) : "generic";
+
+  // Called here, during the hook's own render rather than inside queryFn,
+  // so notFound()'s thrown digest error reaches Next's render-time
+  // not-found boundary instead of being swallowed by TanStack Query.
+  if (errorType === "notFound") {
+    notFound();
+  }
+
   return {
     data: data ?? null,
     isLoading,
     error: error ?? null,
-    errorType: error ? classifyError(error) : "generic",
+    errorType,
     refetch: async () => {
       await refetch();
     },
