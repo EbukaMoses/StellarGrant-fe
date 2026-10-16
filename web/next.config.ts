@@ -21,7 +21,7 @@ const ContentSecurityPolicy = `
     https://gateway.pinata.cloud
     ${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000"}
     ws: wss:;
-  frame-src 'none';
+  frame-src https://ipfs.io https://www.youtube.com https://www.youtube-nocookie.com;
   object-src 'none';
   base-uri 'self';
   form-action 'self';
