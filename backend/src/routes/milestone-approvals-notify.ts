@@ -6,6 +6,7 @@ import { User } from "../entities/User";
 import { getEmailTemplate, sendEmail } from "../services/email-service";
 import { WebhookDispatcher } from "../services/webhook-dispatcher";
 import { WebhookEventType } from "../entities/WebhookSubscription";
+import { walletLimiters } from "../middlewares/rate-limiter";
 
 export const buildMilestoneApprovalNotifyRouter = (
   approvalRepo: Repository<MilestoneApproval>,
@@ -16,11 +17,21 @@ export const buildMilestoneApprovalNotifyRouter = (
   const router = Router();
 
   // Reviewer approves a milestone and triggers notification to grant owner
-  router.post("/notify", async (req, res) => {
+  // Requires rate limiting (#1251) to prevent notification spam
+  router.post("/notify", walletLimiters.milestoneApproval, async (req, res) => {
     const { grantId, milestoneIdx, reviewerStellarAddress, approved } = req.body;
     if (!grantId || milestoneIdx === undefined || !reviewerStellarAddress || approved === undefined) {
       return res.status(400).json({ error: "grantId, milestoneIdx, reviewerStellarAddress, and approved are required" });
     }
+
+    // Check for duplicate approval (dedup) (#1251)
+    const existing = await approvalRepo.findOne({
+      where: { grantId, milestoneIdx, reviewerStellarAddress },
+    });
+    if (existing) {
+      return res.status(409).json({ error: "Duplicate approval: this reviewer has already voted on this milestone" });
+    }
+
     const approval = approvalRepo.create({ grantId, milestoneIdx, reviewerStellarAddress, approved });
     await approvalRepo.save(approval);
 
