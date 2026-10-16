@@ -5,7 +5,7 @@ import {
   CreateDateColumn,
 } from "typeorm";
 
-@Entity()
+@Entity({ name: "rate_limit_logs" })
 export class RateLimitLog {
   @PrimaryGeneratedColumn()
   id!: number;

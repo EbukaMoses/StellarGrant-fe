@@ -10,6 +10,15 @@ import { walletLimiters } from "../middlewares/rate-limiter";
 import { authMiddleware } from "../middlewares/auth-middleware";
 import type { AuthenticatedRequest } from "../types/auth";
 
+const isUniqueViolation = (err: unknown): boolean => {
+  const e = err as { code?: string; message?: string } | undefined;
+  return (
+    e?.code === "23505" ||
+    e?.code === "SQLITE_CONSTRAINT" ||
+    /unique constraint|UNIQUE constraint/i.test(e?.message ?? "")
+  );
+};
+
 interface ResolveBody {
   approve_payout: boolean;
   tx_hash?: string;
@@ -342,6 +351,13 @@ export const buildGrantDisputesRouter = (dataSource: DataSource) => {
         const saved = await disputeRepo.save(dispute);
         res.status(201).json({ data: saved });
       } catch (err) {
+        // A concurrent request won the race; the unique constraint rejected ours.
+        if (isUniqueViolation(err)) {
+          res
+            .status(409)
+            .json({ error: "Dispute already exists for this milestone" });
+          return;
+        }
         next(err);
       }
     }

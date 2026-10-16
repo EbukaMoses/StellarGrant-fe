@@ -12,6 +12,8 @@ import { ReputationLog } from "../entities/ReputationLog";
 import { AuditLog } from "../entities/AuditLog";
 import { UserWatchlist } from "../entities/UserWatchlist";
 import { Activity } from "../entities/Activity";
+import { Dispute } from "../entities/Dispute";
+import { MilestoneAppeal } from "../entities/MilestoneAppeal";
 import { GrantView } from "../entities/GrantView";
 import { ReconciliationCheckpoint } from "../entities/ReconciliationCheckpoint";
 import { RateLimitLog } from "../entities/RateLimitLog";
@@ -37,6 +39,7 @@ export default new DataSource({
     ReconciliationCheckpoint, RateLimitLog, Community, MilestoneComment,
     GrantHistory, FeeCollection, PlatformConfig, Report,
     WebhookSubscription, WebhookDeliveryLog, Role, UserRole, GrantFeedback,
+    Dispute, MilestoneAppeal,
   ],
   migrations: ["src/db/migrations/*.ts"],
   synchronize: false,

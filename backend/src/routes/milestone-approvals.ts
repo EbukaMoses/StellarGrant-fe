@@ -13,8 +13,14 @@ export const buildMilestoneApprovalRouter = (approvalRepo: Repository<MilestoneA
     if (!grantId || milestoneIdx === undefined || !reviewerStellarAddress || approved === undefined) {
       return res.status(400).json({ error: "grantId, milestoneIdx, reviewerStellarAddress, and approved are required" });
     }
-    const approval = approvalRepo.create({ grantId, milestoneIdx, reviewerStellarAddress, approved });
-    await approvalRepo.save(approval);
+    // Upsert: a resubmitted vote updates the reviewer's existing row.
+    await approvalRepo.upsert(
+      { grantId, milestoneIdx, reviewerStellarAddress, approved },
+      ["grantId", "milestoneIdx", "reviewerStellarAddress"]
+    );
+    const approval = await approvalRepo.findOneOrFail({
+      where: { grantId, milestoneIdx, reviewerStellarAddress },
+    });
     try {
       notificationService.broadcast("milestoneApproved", { grantId, milestoneIdx, approved, reviewer: reviewerStellarAddress });
     } catch (e) {
