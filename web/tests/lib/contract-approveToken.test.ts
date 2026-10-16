@@ -1,15 +1,31 @@
 /**
  * ContractClient.approveToken validation tests.
  *
- * The on-chain build is a stub (like the other contract methods), but the
- * input guards are exercised here so callers get clear errors for the USDC
- * approve → deposit flow.
+ * The approval build goes through Horizon (account load) and Soroban RPC
+ * (latest ledger), so both clients are mocked here to keep the suite
+ * hermetic; the guards run before any network access and are exercised as-is.
  */
 
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Account, xdr } from "@stellar/stellar-sdk";
+
+vi.mock("@/lib/stellar/client", () => ({
+  getRpcClient: vi.fn(),
+  getHorizonClient: vi.fn(),
+  rpcClient: { getLatestLedger: vi.fn() },
+  horizonClient: { loadAccount: vi.fn() },
+  networkPassphraseConfig: "Test SDF Network ; September 2015",
+}));
+
+import { horizonClient, rpcClient } from "@/lib/stellar/client";
 import { ContractClient } from "@/lib/stellar/contract";
 
 const client = new ContractClient();
+
+// Valid StrKey addresses: the fake "GOWNER…"/"CCONTRACT…" placeholders never
+// made it past Horizon / nativeToScVal anyway.
+const OWNER = "GADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOZPI";
+const SPENDER = "CADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP5KR";
 
 const valid = {
   tokenAddress: "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
@@ -17,6 +33,10 @@ const valid = {
   amount: 1_000_000n,
   owner: "GOWNER00000000000000000000000000000000000000000000000000",
 };
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("ContractClient.approveToken", () => {
   it("requires a token address", async () => {
@@ -35,8 +55,21 @@ describe("ContractClient.approveToken", () => {
     await expect(client.approveToken({ ...valid, amount: 0n })).rejects.toThrow(/amount/);
   });
 
-  it("passes validation for well-formed params (build still pending)", async () => {
-    // Guards pass; the unimplemented on-chain build throws a distinct error.
-    await expect(client.approveToken(valid)).rejects.toThrow(/Not implemented/);
+  it("builds an unsigned approval XDR for well-formed params", async () => {
+    vi.mocked(horizonClient.loadAccount).mockResolvedValue(
+      new Account(OWNER, "0") as unknown as Awaited<ReturnType<typeof horizonClient.loadAccount>>,
+    );
+    vi.mocked(rpcClient.getLatestLedger).mockResolvedValue({
+      id: "",
+      protocolVersion: 22,
+      sequence: 5_000_000,
+    } as unknown as Awaited<ReturnType<typeof rpcClient.getLatestLedger>>);
+
+    const txXdr = await client.approveToken({ ...valid, owner: OWNER, spender: SPENDER });
+
+    expect(typeof txXdr).toBe("string");
+    expect(() => xdr.TransactionEnvelope.fromXDR(txXdr, "base64")).not.toThrow();
+    expect(horizonClient.loadAccount).toHaveBeenCalledWith(OWNER);
+    expect(rpcClient.getLatestLedger).toHaveBeenCalled();
   });
 });
