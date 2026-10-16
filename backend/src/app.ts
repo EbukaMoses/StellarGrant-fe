@@ -42,6 +42,8 @@ import { WebhookDispatcher } from "./services/webhook-dispatcher";
 import { notificationService } from "./services/notification-service";
 import { buildUserRouter } from "./routes/users";
 import { buildGrantReviewerRouter } from "./routes/grant-reviewers";
+import { NonceService } from "./services/nonce-service";
+import { UsedNonce } from "./entities/UsedNonce";
 import { buildMilestoneApprovalNotifyRouter } from "./routes/milestone-approvals-notify";
 import { buildMilestoneCommentsRouter } from "./routes/milestone-comments";
 import { buildDisputesRouter, buildGrantDisputesRouter } from "./routes/disputes";
@@ -75,6 +77,7 @@ export const createApp = (dataSource: DataSource, sorobanClient: SorobanContract
 
   const grantSyncService = new GrantSyncService(dataSource, sorobanClient);
   const signatureService = new SignatureService();
+  const nonceService = new NonceService(dataSource.getRepository(UsedNonce));
   const leaderboardService = new LeaderboardService(dataSource);
   const responseCacheService = new ResponseCacheService();
   const rbacService = new RbacService(userRepo, roleRepo, userRoleRepo);
@@ -93,10 +96,11 @@ export const createApp = (dataSource: DataSource, sorobanClient: SorobanContract
       activityRepo,
       reviewerRepo,
       responseCacheService,
+      nonceService,
     ),
   );
   app.use("/grants", buildGrantDraftsRouter(dataSource, webhookDispatcher));
-  app.use("/milestone_proof", buildMilestoneProofRouter(proofRepo, signatureService, grantRepo, userRepo));
+  app.use("/milestone_proof", buildMilestoneProofRouter(proofRepo, signatureService, grantRepo, userRepo, nonceService));
   app.use("/search", buildSearchRouter(dataSource));
   app.use("/leaderboard", buildLeaderboardRouter(leaderboardService));
   app.use("/profiles", buildProfilesRouter(contributorRepo, grantRepo));
@@ -107,7 +111,7 @@ export const createApp = (dataSource: DataSource, sorobanClient: SorobanContract
   app.use("/ipfs", buildIpfsPresignRouter());
   app.use("/events", buildEventsRouter(activityRepo));
   app.use("/users", buildUserRouter(userRepo));
-  app.use("/grant_reviewers", buildGrantReviewerRouter(reviewerRepo));
+  app.use("/grant_reviewers", buildGrantReviewerRouter(reviewerRepo, signatureService, grantRepo, nonceService));
   app.use("/milestone_approvals_notify", buildMilestoneApprovalNotifyRouter(approvalRepo, grantRepo, userRepo, webhookDispatcher));
   app.use("/disputes", buildDisputesRouter(dataSource, rbacService, webhookDispatcher));
   app.use("/", buildGrantDisputesRouter(dataSource));

@@ -3,6 +3,7 @@ import { Repository } from "typeorm";
 import { z } from "zod";
 import { MilestoneProof } from "../entities/MilestoneProof";
 import { SignatureService } from "../services/signature-service";
+import { NonceService, NonceReplayError } from "../services/nonce-service";
 import { getEmailTemplate, sendEmail } from "../services/email-service";
 import { Grant } from "../entities/Grant";
 import { User } from "../entities/User";
@@ -24,6 +25,7 @@ export const buildMilestoneProofRouter = (
   signatureService: SignatureService,
   grantRepo?: Repository<Grant>,
   userRepo?: Repository<User>,
+  nonceService?: NonceService,
 ) => {
   const router = Router();
 
@@ -46,6 +48,11 @@ export const buildMilestoneProofRouter = (
       if (!signatureIsValid) {
         res.status(401).json({ error: "Invalid Stellar signature" });
         return;
+      }
+
+      // Explicit replay protection (#1239) — do not rely on (grantId, milestoneIdx) uniqueness.
+      if (nonceService) {
+        await nonceService.consume(payload.nonce);
       }
 
       const proof = await proofRepo.save({
@@ -94,6 +101,10 @@ export const buildMilestoneProofRouter = (
 
       res.status(201).json({ data: proof });
     } catch (error: any) {
+      if (error instanceof NonceReplayError) {
+        res.status(409).json({ error: "Signature nonce has already been used" });
+        return;
+      }
       if (error?.code === "23505" || error?.code === "SQLITE_CONSTRAINT") {
         res.status(409).json({ error: "Proof already submitted for this milestone" });
         return;

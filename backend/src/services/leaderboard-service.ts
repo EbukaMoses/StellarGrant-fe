@@ -119,8 +119,10 @@ export class LeaderboardService {
 
     const countResult = await this.reputationLogRepo
       .createQueryBuilder("log")
+      .innerJoin(Contributor, "c", "c.address = log.address")
       .select("COUNT(DISTINCT log.address)", "count")
       .where("log.timestamp >= :thirtyDaysAgo", { thirtyDaysAgo })
+      .andWhere("c.isBlacklisted = false")
       .getRawOne<{ count: string }>();
 
     const totalCount = parseInt(countResult?.count ?? "0", 10);
@@ -130,9 +132,11 @@ export class LeaderboardService {
 
     const rawResults = await this.reputationLogRepo
       .createQueryBuilder("log")
+      .innerJoin(Contributor, "c", "c.address = log.address")
       .select("log.address", "address")
       .addSelect("SUM(log.gain)", "monthlyReputation")
       .where("log.timestamp >= :thirtyDaysAgo", { thirtyDaysAgo })
+      .andWhere("c.isBlacklisted = false")
       .groupBy("log.address")
       .orderBy("SUM(log.gain)", "DESC")
       .addOrderBy("log.address", "ASC")
@@ -165,8 +169,10 @@ export class LeaderboardService {
 
     const countResult = await this.reputationLogRepo
       .createQueryBuilder("log")
+      .innerJoin(Contributor, "c", "c.address = log.address")
       .select("COUNT(DISTINCT log.address)", "count")
       .where("log.timestamp >= :thirtyDaysAgo", { thirtyDaysAgo })
+      .andWhere("c.isBlacklisted = false")
       .getRawOne<{ count: string }>();
 
     const totalCount = parseInt(countResult?.count ?? "0", 10);
@@ -188,9 +194,11 @@ export class LeaderboardService {
 
     const rawResults = await this.reputationLogRepo
       .createQueryBuilder("log")
+      .innerJoin(Contributor, "c", "c.address = log.address")
       .select("log.address", "address")
       .addSelect("SUM(log.gain)", "monthlyReputation")
       .where("log.timestamp >= :thirtyDaysAgo", { thirtyDaysAgo })
+      .andWhere("c.isBlacklisted = false")
       .groupBy("log.address")
       .having(
         "(SUM(log.gain) < :rep OR (SUM(log.gain) = :rep AND log.address > :addr))",
