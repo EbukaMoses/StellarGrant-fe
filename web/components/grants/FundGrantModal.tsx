@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -9,6 +9,10 @@ import { X, ExternalLink, RefreshCw, Loader2 } from "lucide-react";
 import { FundingProgress } from "@/components/grants/FundingProgress";
 import { useWalletStore } from "@/lib/store/walletStore";
 import { useFundGrant } from "@/hooks/useFundGrant";
+import {
+  fetchGrantFundingState,
+  remainingCapacity,
+} from "@/lib/grants/funding";
 import type { Grant } from "@/types";
 
 const STROOP = 10_000_000n;
@@ -72,7 +76,11 @@ export function FundGrantModal({ grant, open, onClose, onSuccess }: FundGrantMod
     isBalanceLoading,
   } = useFundGrant();
 
-  const unfunded = grant.budget - grant.funded;
+  const [liveBudget, setLiveBudget] = useState(grant.budget);
+  const [liveFunded, setLiveFunded] = useState(grant.funded);
+  const [capError, setCapError] = useState<string | null>(null);
+
+  const unfunded = liveBudget - liveFunded > 0n ? liveBudget - liveFunded : 0n;
   const walletXlm = walletBalance?.xlm ?? 0n;
   const maxFundable = walletXlm < unfunded ? walletXlm : unfunded;
 
@@ -94,9 +102,18 @@ export function FundGrantModal({ grant, open, onClose, onSuccess }: FundGrantMod
   const amountValue = watch("amount");
   const amountStroops = amountValue ? xlmToStroops(amountValue) : 0n;
   const contributionPct =
-    grant.budget > 0n
-      ? Math.min(100, Number((amountStroops * 100n) / grant.budget))
+    liveBudget > 0n
+      ? Math.min(100, Number((amountStroops * 100n) / liveBudget))
       : 0;
+
+  // Sync prop snapshot when modal opens; clear stale cap errors.
+  useEffect(() => {
+    if (open) {
+      setLiveBudget(grant.budget);
+      setLiveFunded(grant.funded);
+      setCapError(null);
+    }
+  }, [open, grant.budget, grant.funded]);
 
   // Reset everything when modal closes
   useEffect(() => {
@@ -104,6 +121,7 @@ export function FundGrantModal({ grant, open, onClose, onSuccess }: FundGrantMod
       queueMicrotask(() => {
         resetForm();
         resetFund();
+        setCapError(null);
       });
     }
   }, [open, resetForm, resetFund]);
@@ -118,13 +136,38 @@ export function FundGrantModal({ grant, open, onClose, onSuccess }: FundGrantMod
 
   const onSubmit = useCallback(
     async (values: FundFormValues) => {
+      setCapError(null);
+      const amount = xlmToStroops(values.amount);
+
+      // Re-fetch immediately before submit to avoid stale funding-cap races.
+      const fresh = await fetchGrantFundingState(grant.id);
+      if (!fresh) {
+        setCapError("Could not verify current funding status. Please try again.");
+        return;
+      }
+
+      setLiveBudget(fresh.budget);
+      setLiveFunded(fresh.funded);
+      const remaining = remainingCapacity(fresh);
+
+      if (remaining === 0n) {
+        setCapError("This grant is already fully funded.");
+        return;
+      }
+      if (amount > remaining) {
+        setCapError(
+          `Amount exceeds the remaining unfunded balance (${stroopsToXlm(remaining)} XLM).`,
+        );
+        return;
+      }
+
       await fund({
         grantId: grant.id,
-        amount: xlmToStroops(values.amount),
-        token: "native",
+        amount,
+        token: grant.token ?? "native",
       });
     },
-    [fund, grant.id]
+    [fund, grant.id, grant.token],
   );
 
   const handleMaxClick = useCallback(() => {
@@ -177,8 +220,8 @@ export function FundGrantModal({ grant, open, onClose, onSuccess }: FundGrantMod
 
             {/* Funding progress bar */}
             <FundingProgress
-              current={grant.funded}
-              target={grant.budget}
+              current={liveFunded}
+              target={liveBudget}
               token={grant.token}
             />
 
@@ -279,6 +322,9 @@ export function FundGrantModal({ grant, open, onClose, onSuccess }: FundGrantMod
                     <p className="mt-1 font-mono text-xs text-danger">
                       {errors.amount.message}
                     </p>
+                  )}
+                  {capError && (
+                    <p className="mt-1 font-mono text-xs text-danger">{capError}</p>
                   )}
                 </div>
 

@@ -1,6 +1,11 @@
 "use client";
 
-import { formatTokenAmount } from "@/lib/tokens/utils";
+import { useEffect, useState } from "react";
+import {
+  formatTokenAmount,
+  getTokenMetadata,
+  type TokenMetadata,
+} from "@/lib/tokens";
 
 export interface ResolvedDispute {
   id: string;
@@ -15,6 +20,65 @@ export interface ResolvedDispute {
 
 interface DisputeHistoryProps {
   history: ResolvedDispute[];
+}
+
+function DisputeRow({ dispute }: { dispute: ResolvedDispute }) {
+  const [tokenMetadata, setTokenMetadata] = useState<TokenMetadata | null>(
+    null,
+  );
+
+  useEffect(() => {
+    getTokenMetadata(dispute.token)
+      .then(setTokenMetadata)
+      .catch(() => setTokenMetadata(null));
+  }, [dispute.token]);
+
+  const decimals = tokenMetadata?.decimals ?? 7;
+  const symbol = tokenMetadata?.symbol ?? "TOKEN";
+
+  const formatted = formatTokenAmount(dispute.fundedAmount, decimals, {
+    symbol,
+    showSymbol: true,
+  });
+
+  const formattedDate = new Date(dispute.resolvedAt).toLocaleDateString(
+    undefined,
+    {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    },
+  );
+
+  return (
+    <tr className="hover:bg-white/5 transition-colors">
+      <td className="py-3 pr-4">
+        <span className="font-bold text-text-primary block text-[11px] uppercase tracking-wide truncate max-w-[200px] sm:max-w-xs">
+          {dispute.grantTitle}
+        </span>
+        <span className="text-[10px] text-text-muted block mt-0.5">
+          Milestone #{dispute.milestoneIdx + 1}: {dispute.milestoneTitle}
+        </span>
+      </td>
+      <td className="py-3">
+        {dispute.resolution === "payout" ? (
+          <span className="px-2 py-0.5 border border-success/20 bg-success/10 text-success text-[10px] font-semibold uppercase tracking-wider">
+            Payout Approved
+          </span>
+        ) : (
+          <span className="px-2 py-0.5 border border-danger/20 bg-danger/10 text-danger text-[10px] font-semibold uppercase tracking-wider">
+            Funders Refunded
+          </span>
+        )}
+      </td>
+      <td className="py-3 text-right font-semibold text-text-primary text-[11px]">
+        {formatted}
+      </td>
+      <td className="py-3 text-right text-text-muted text-[10px]">
+        {formattedDate}
+      </td>
+    </tr>
+  );
 }
 
 export function DisputeHistory({ history }: DisputeHistoryProps) {
@@ -43,52 +107,9 @@ export function DisputeHistory({ history }: DisputeHistoryProps) {
               </tr>
             </thead>
             <tbody className="divide-y divide-border-color/5">
-              {history.map((h) => {
-                const isXlm = h.token.toLowerCase() === "native" || h.token.length < 10;
-                const decimals = isXlm ? 7 : 6;
-                const symbol = isXlm ? "XLM" : "USDC";
-
-                const formatted = formatTokenAmount(h.fundedAmount, decimals, {
-                  symbol,
-                  showSymbol: true,
-                });
-
-                const formattedDate = new Date(h.resolvedAt).toLocaleDateString(undefined, {
-                  year: "numeric",
-                  month: "short",
-                  day: "numeric",
-                });
-
-                return (
-                  <tr key={h.id} className="hover:bg-white/5 transition-colors">
-                    <td className="py-3 pr-4">
-                      <span className="font-bold text-text-primary block text-[11px] uppercase tracking-wide truncate max-w-[200px] sm:max-w-xs">
-                        {h.grantTitle}
-                      </span>
-                      <span className="text-[10px] text-text-muted block mt-0.5">
-                        Milestone #{h.milestoneIdx + 1}: {h.milestoneTitle}
-                      </span>
-                    </td>
-                    <td className="py-3">
-                      {h.resolution === "payout" ? (
-                        <span className="px-2 py-0.5 border border-success/20 bg-success/10 text-success text-[10px] font-semibold uppercase tracking-wider">
-                          Payout Approved
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 border border-danger/20 bg-danger/10 text-danger text-[10px] font-semibold uppercase tracking-wider">
-                          Funders Refunded
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3 text-right font-semibold text-text-primary text-[11px]">
-                      {formatted}
-                    </td>
-                    <td className="py-3 text-right text-text-muted text-[10px]">
-                      {formattedDate}
-                    </td>
-                  </tr>
-                );
-              })}
+              {history.map((h) => (
+                <DisputeRow key={h.id} dispute={h} />
+              ))}
             </tbody>
           </table>
         </div>

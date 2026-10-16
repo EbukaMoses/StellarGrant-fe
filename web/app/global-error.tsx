@@ -1,11 +1,23 @@
 "use client";
 
+import { useEffect } from "react";
+import { toUserFacingErrorMessage } from "@/lib/errors/userFacingMessage";
+
 interface GlobalErrorProps {
-  error: Error;
+  error: Error & { digest?: string };
   reset: () => void;
 }
 
 export default function GlobalError({ error, reset }: GlobalErrorProps) {
+  useEffect(() => {
+    console.error("[GlobalErrorBoundary]", error);
+  }, [error]);
+
+  // Bounded message — never an unbounded raw error.message (issue #1294).
+  const message = toUserFacingErrorMessage(error, {
+    fallback: "The application encountered an unrecoverable error.",
+  });
+
   return (
     <html lang="en">
       <body
@@ -47,12 +59,30 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
             style={{
               fontSize: "0.85rem",
               color: "#6B7280",
-              marginBottom: "1.5rem",
+              marginBottom: error.digest ? "0.75rem" : "1.5rem",
               wordBreak: "break-word",
             }}
           >
-            {error.message ?? "The application encountered an unrecoverable error."}
+            {message}
           </p>
+          {error.digest && (
+            <pre
+              style={{
+                margin: "0 0 1.5rem",
+                padding: "0.5rem 0.75rem",
+                border: "1px solid rgba(107, 114, 128, 0.4)",
+                backgroundColor: "#050A14",
+                color: "#6B7280",
+                fontFamily: "monospace",
+                fontSize: "0.75rem",
+                textAlign: "left",
+                overflowX: "auto",
+                wordBreak: "break-word",
+              }}
+            >
+              digest: {error.digest}
+            </pre>
+          )}
           <button
             type="button"
             onClick={reset}

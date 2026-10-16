@@ -17,6 +17,7 @@ export {
   formatTokenAmount,
   parseTokenAmount,
   convertTokenDecimals,
+  convertTokenDecimalsWithRemainder,
   minTokenAmount,
   isZeroAmount,
   addTokenAmounts,
@@ -25,3 +26,5 @@ export {
   isNativeToken,
   getDefaultDecimals,
 } from "./utils";
+
+export type { TokenRoundingMode, ConvertedTokenAmount } from "./utils";

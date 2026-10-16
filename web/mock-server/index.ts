@@ -8,7 +8,7 @@ import milestonesRouter from "./routes/milestones";
 import dashboardRouter from "./routes/dashboard";
 
 const app = express();
-const PORT = 4001;
+const PORT = parseInt(process.env.PORT ?? '4000');
 
 // Configuration
 const MOCK_DELAY = parseInt(process.env.MOCK_DELAY ?? '200');

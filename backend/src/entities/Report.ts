@@ -9,8 +9,8 @@ export class Report {
   @Column({ type: "varchar", length: 120 })
   reporterAddress!: string;
 
-  @Column({ type: "int" })
-  grantId!: number;
+  @Column({ type: "int", nullable: true })
+  grantId!: number | null;
 
   @Column({ type: "text" })
   reason!: string;
@@ -21,7 +21,7 @@ export class Report {
   @CreateDateColumn()
   createdAt!: Date;
 
-  @ManyToOne(() => Grant, { onDelete: "CASCADE" })
+  @ManyToOne(() => Grant, { onDelete: "SET NULL", nullable: true })
   @JoinColumn({ name: "grantId" })
-  grant!: Grant;
+  grant!: Grant | null;
 }

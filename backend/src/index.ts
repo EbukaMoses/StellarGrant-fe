@@ -1,5 +1,6 @@
 import { createServer } from "http";
 import { env } from "./config/env";
+import { validateEnvOnStartup } from "./config/env-validation";
 import { createApp } from "./app";
 import { buildDataSource } from "./db/data-source";
 import { MockSorobanContractClient } from "./soroban/mock-client";

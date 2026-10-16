@@ -67,7 +67,7 @@ export function VotePanel({
   milestoneIdx,
   reviewers,
   quorum,
-  threshold = 0.67,
+  threshold = 0.5,
   connectionStatus,
 }: VotePanelProps) {
   const { address: walletAddress } = useWalletStore();

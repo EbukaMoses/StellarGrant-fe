@@ -23,6 +23,11 @@ describe('FundingProgress', () => {
     expect(screen.getByText('100.0%')).toBeTruthy();
   });
 
+  it('shows the correctly rounded fractional percentage', () => {
+    render(<FundingProgress current={2n} target={3n} />);
+    expect(screen.getByText('66.7%')).toBeTruthy();
+  });
+
   it('handles zero target gracefully without throwing', () => {
     expect(() => {
       render(<FundingProgress current={0n} target={0n} />);

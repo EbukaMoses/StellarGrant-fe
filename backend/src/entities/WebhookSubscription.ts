@@ -1,5 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from "typeorm";
 import { User } from "./User";
+import { encryptedFieldTransformer } from "../utils/field-encryption";
 
 /**
  * Supported webhook event types
@@ -29,7 +30,7 @@ export class WebhookSubscription {
   @Column({ name: "target_url", type: "varchar", length: 2048 })
   targetUrl!: string;
 
-  @Column({ name: "secret_key", type: "varchar", length: 255 })
+  @Column({ name: "secret_key", type: "varchar", length: 1024, transformer: encryptedFieldTransformer })
   secretKey!: string;
 
   @Column({ type: "simple-array" })

@@ -6,8 +6,8 @@ export class GrantHistory {
   @PrimaryGeneratedColumn("increment")
   id!: number;
 
-  @Column({ type: "int" })
-  grantId!: number;
+  @Column({ type: "int", nullable: true })
+  grantId!: number | null;
 
   @Column({ type: "simple-json" })
   snapshot!: any;
@@ -18,7 +18,7 @@ export class GrantHistory {
   @CreateDateColumn()
   createdAt!: Date;
 
-  @ManyToOne(() => Grant, { onDelete: "CASCADE" })
+  @ManyToOne(() => Grant, { onDelete: "SET NULL", nullable: true })
   @JoinColumn({ name: "grantId" })
-  grant!: Grant;
+  grant!: Grant | null;
 }

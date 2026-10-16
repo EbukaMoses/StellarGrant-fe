@@ -8,6 +8,7 @@ const mockGrants: SorobanGrant[] = [
     recipient: "GBRPYHIL2C2WBO36G6UIGR2PA4M3TQ7VOY3RTMAL4LRRA67ZOHQ65SZD",
     totalAmount: "250000000",
     owner: "GOWNEREXAMPLEADDRESS0000000000000000000000000000000000",
+    token: "native",
     milestones: [
       {
         idx: 0,
@@ -42,6 +43,7 @@ const mockGrants: SorobanGrant[] = [
     recipient: "GCBQ6JQXQTVV7T7OUVPR4Q6PGACCUAKS6S2YDG3YQYQYRR2NJB5A6NAA",
     totalAmount: "100000000",
     owner: "GOWNEREXAMPLEADDRESS1111111111111111111111111111111111",
+    token: "USDC",
     milestones: [
       {
         idx: 0,
@@ -58,6 +60,7 @@ const mockGrants: SorobanGrant[] = [
     recipient: "GDATAPRIVACYRECPNT0000000000000000000000000000000000000",
     totalAmount: "150000000",
     owner: "GOWNEREXAMPLEADDRESS2222222222222222222222222222222222",
+    token: "native",
     milestones: [
       {
         idx: 0,
@@ -74,6 +77,7 @@ const mockGrants: SorobanGrant[] = [
     recipient: "GEDUCATIONOUTREACHRECIPIENT0000000000000000000000000",
     totalAmount: "50000000",
     owner: "GOWNEREXAMPLEADDRESS3333333333333333333333333333333333333",
+    token: "native",
     milestones: [
       {
         idx: 0,

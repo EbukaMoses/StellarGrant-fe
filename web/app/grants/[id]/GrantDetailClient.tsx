@@ -13,7 +13,7 @@ import { FundGrantModal } from "@/components/grants/FundGrantModal";
 import { WatchButton } from "@/components/grants/WatchButton";
 import { ShareButton } from "@/components/grants/ShareButton";
 import RichTextRenderer from "@/components/ui/RichTextRenderer";
-import { formatDate } from "@/lib/utils";
+import { formatDate, requiredApprovals } from "@/lib/utils";
 import { formatTokenAmount, getTokenMetadata } from "@/lib/tokens";
 import { stellarExplorerAccount } from "@/lib/constants";
 import { exportGrantAsJSON, exportGrantAsCSV, exportFundersAsCSV } from "@/lib/utils/export";
@@ -295,10 +295,7 @@ function GrantDetailContent({ grantId }: { grantId: string }) {
   const statusLabel = ["Pending", "Active", "In Progress", "Completed", "Cancelled"][grant.status] ?? "Pending";
   const canFund = statusLabel !== "Completed" && statusLabel !== "Cancelled";
   const daysLeft = grant.deadline > 0n ? daysUntilDeadline(grant.deadline) : null;
-  const quorumRequired =
-    grant.reviewers.length > 0
-      ? Math.floor(grant.reviewers.length / 2) + 1
-      : 0;
+  const quorumRequired = requiredApprovals(grant.reviewers.length);
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8">

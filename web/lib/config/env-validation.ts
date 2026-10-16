@@ -31,16 +31,42 @@ const ENV_VARS: EnvVarConfig[] = [
   },
 ];
 
+// Name fragments (split on "_") that suggest a NEXT_PUBLIC_* variable is
+// actually holding a credential rather than a value that's safe to ship to
+// the browser. NEXT_PUBLIC_* variables are inlined into client-side JS at
+// build time and are visible to anyone who loads the site.
+const SECRET_NAME_FRAGMENTS = new Set(["JWT", "SECRET", "KEY", "TOKEN", "PASSWORD"]);
+
+function looksLikeSecretName(varName: string): boolean {
+  return varName
+    .split("_")
+    .some((fragment) => SECRET_NAME_FRAGMENTS.has(fragment.toUpperCase()));
+}
+
 interface ValidationResult {
   valid: boolean;
   errors: string[];
   warnings: string[];
+  securityWarnings: string[];
 }
 
 export function validateEnv(): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const securityWarnings: string[] = [];
   const isDevelopment = process.env.NODE_ENV !== "production";
+
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("NEXT_PUBLIC_") && looksLikeSecretName(key)) {
+      securityWarnings.push(
+        `Possible credential exposed to the browser: ${key}\n` +
+        `  NEXT_PUBLIC_* variables are bundled into client-side JavaScript and are ` +
+        `publicly visible to anyone who loads the site.\n` +
+        `  If ${key} holds a real secret, drop the NEXT_PUBLIC_ prefix and read it ` +
+        `only from server-side code.`
+      );
+    }
+  }
 
   for (const config of ENV_VARS) {
     const value = process.env[config.name];
@@ -74,11 +100,23 @@ export function validateEnv(): ValidationResult {
     valid: errors.length === 0,
     errors,
     warnings,
+    securityWarnings,
   };
 }
 
 export function logValidationResult(result: ValidationResult): void {
   const isDevelopment = process.env.NODE_ENV !== "production";
+
+  // Security warnings are logged regardless of environment: a leaked
+  // credential is most dangerous in production, which is exactly where
+  // the regular dev-only warnings below would otherwise hide it.
+  if (result.securityWarnings.length > 0) {
+    console.error("\n🔒 Environment Variable Security Warnings:");
+    result.securityWarnings.forEach((warning) => {
+      console.error(`  ${warning}`);
+    });
+    console.error("");
+  }
 
   if (result.warnings.length > 0 && isDevelopment) {
     console.warn("\n⚠️  Environment Variable Warnings:");

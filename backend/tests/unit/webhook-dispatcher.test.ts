@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { WebhookDispatcher, WebhookPayload } from "../../src/services/webhook-dispatcher";
 import { WebhookSubscription, WebhookEventType } from "../../src/entities/WebhookSubscription";
 import { WebhookDeliveryLog, WebhookDeliveryStatus } from "../../src/entities/WebhookDeliveryLog";
-import { Repository, DataSource } from "typeorm";
+import { Repository, DataSource, FindOperator } from "typeorm";
 
 describe("WebhookDispatcher", () => {
   let dispatcher: WebhookDispatcher;
@@ -238,6 +238,28 @@ describe("WebhookDispatcher", () => {
 
       expect(subscription.isActive).toBe(false);
       expect(subscription.failureCount).toBe(10);
+    });
+  });
+
+  describe("processRetries", () => {
+    it("selects due retries with a TypeORM operator and re-attempts them", async () => {
+      const subscription = { id: 7, isActive: true, secretKey: "secret" } as any;
+      const log = {
+        id: 11,
+        status: WebhookDeliveryStatus.RETRYING,
+        payload: { event: WebhookEventType.GRANT_CREATED, timestamp: "t", data: {} },
+        subscription,
+      } as any;
+      (deliveryLogRepo.find as any).mockResolvedValue([log]);
+      const attempt = vi.spyOn(dispatcher as any, "attemptDelivery").mockResolvedValue(undefined);
+
+      await (dispatcher as any).processRetries();
+
+      const where = (deliveryLogRepo.find as any).mock.calls[0][0].where;
+      expect(where.status).toBe(WebhookDeliveryStatus.RETRYING);
+      expect(where.nextRetryAt).toBeInstanceOf(FindOperator);
+      expect(where.nextRetryAt.type).toBe("lessThanOrEqual");
+      expect(attempt).toHaveBeenCalledTimes(1);
     });
   });
 });

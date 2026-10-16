@@ -3,7 +3,9 @@ import { Permission } from "../config/rbac";
 import { RbacService } from "../services/rbac-service";
 
 /**
- * Extended Request type with user information 
+ * Extended Request type with user information.
+ * `user.stellarAddress` must be set by a signature-verifying auth step
+ * (see signed-user-auth.ts); RBAC never reads the address from a raw header.
  */
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -22,8 +24,8 @@ export const createRbacMiddleware = (rbacService: RbacService) => {
   const requirePermission = (permission: Permission) => {
     return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
-        const stellarAddress = req.user?.stellarAddress || req.header("x-user-address");
-        
+        const stellarAddress = req.user?.stellarAddress;
+
         if (!stellarAddress) {
           res.status(401).json({ error: "Authentication required" });
           return;
@@ -53,8 +55,8 @@ export const createRbacMiddleware = (rbacService: RbacService) => {
   const requireAnyPermission = (permissions: Permission[]) => {
     return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
-        const stellarAddress = req.user?.stellarAddress || req.header("x-user-address");
-        
+        const stellarAddress = req.user?.stellarAddress;
+
         if (!stellarAddress) {
           res.status(401).json({ error: "Authentication required" });
           return;
@@ -106,8 +108,8 @@ export const createRbacMiddleware = (rbacService: RbacService) => {
   const requireOwnership = (getResourceOwnerId: (req: AuthenticatedRequest) => string | number | Promise<string | number>) => {
     return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
-        const stellarAddress = req.user?.stellarAddress || req.header("x-user-address");
-        
+        const stellarAddress = req.user?.stellarAddress;
+
         if (!stellarAddress) {
           res.status(401).json({ error: "Authentication required" });
           return;

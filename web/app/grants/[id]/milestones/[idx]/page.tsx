@@ -21,6 +21,7 @@ import { useMilestone } from "@/hooks/useMilestone";
 import { useContractEvents } from "@/hooks/useContractEvents";
 import { useWalletStore } from "@/lib/store/walletStore";
 import { formatTokenAmount, getTokenMetadata } from "@/lib/tokens";
+import { QUORUM_THRESHOLD, requiredApprovals } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
 import { VotePanel } from "@/components/milestones/VotePanel";
 import { ProofViewer } from "@/components/milestones/ProofViewer";
@@ -305,8 +306,8 @@ function MilestoneDetailContent({
           grantId={grantId}
           milestoneIdx={milestoneIdx}
           reviewers={grant.reviewers}
-          quorum={Math.ceil(grant.reviewers.length * 0.67)}
-          threshold={0.67}
+          quorum={requiredApprovals(grant.reviewers.length)}
+          threshold={QUORUM_THRESHOLD}
           connectionStatus={connectionStatus}
         />
         {!isReviewer && !isRecipient && walletAddress && (

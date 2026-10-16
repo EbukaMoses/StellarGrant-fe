@@ -9,6 +9,7 @@ import {
   formatTokenAmount,
   parseTokenAmount,
   convertTokenDecimals,
+  convertTokenDecimalsWithRemainder,
   minTokenAmount,
   isZeroAmount,
   addTokenAmounts,
@@ -67,6 +68,16 @@ describe("formatTokenAmount", () => {
 
     it("should handle number input", () => {
       expect(formatTokenAmount(10000000, 7)).toBe("1");
+    });
+
+    it("should reject number input above MAX_SAFE_INTEGER", () => {
+      expect(formatTokenAmount(Number.MAX_SAFE_INTEGER + 2, 7)).toBe("Invalid");
+      expect(formatTokenAmount(Infinity, 7, { symbol: "XLM", showSymbol: true })).toBe("Invalid XLM");
+    });
+
+    it("should format amounts above MAX_SAFE_INTEGER exactly as bigint/string", () => {
+      expect(formatTokenAmount(90071992547409930000000n, 7)).toBe("9,007,199,254,740,993");
+      expect(formatTokenAmount("90071992547409930000000", 7)).toBe("9,007,199,254,740,993");
     });
 
     it("should handle string input", () => {
@@ -163,6 +174,70 @@ describe("convertTokenDecimals", () => {
 
   it("should handle large decimal differences", () => {
     expect(convertTokenDecimals(BigInt("1000000000000000000"), 18, 7)).toBe(10000000n);
+  });
+
+  it("defaults to truncation toward zero (documented, historical behaviour)", () => {
+    // 15 dropped to 6 decimals → 1.5 → truncated, not rounded
+    expect(convertTokenDecimals(15n, 7, 6)).toBe(1n);
+    expect(convertTokenDecimals(-15n, 7, 6)).toBe(-1n);
+  });
+
+  it("supports explicit rounding modes when reducing precision", () => {
+    expect(convertTokenDecimals(15n, 7, 6, "trunc")).toBe(1n);
+    expect(convertTokenDecimals(15n, 7, 6, "floor")).toBe(1n);
+    expect(convertTokenDecimals(15n, 7, 6, "ceil")).toBe(2n);
+    expect(convertTokenDecimals(15n, 7, 6, "round")).toBe(2n);
+    expect(convertTokenDecimals(14n, 7, 6, "round")).toBe(1n);
+  });
+
+  it("rounds negative amounts consistently per mode", () => {
+    // -1.5 → trunc: -1, floor: -2, ceil: -1, round (half away from zero): -2
+    expect(convertTokenDecimals(-15n, 7, 6, "trunc")).toBe(-1n);
+    expect(convertTokenDecimals(-15n, 7, 6, "floor")).toBe(-2n);
+    expect(convertTokenDecimals(-15n, 7, 6, "ceil")).toBe(-1n);
+    expect(convertTokenDecimals(-15n, 7, 6, "round")).toBe(-2n);
+    expect(convertTokenDecimals(-14n, 7, 6, "round")).toBe(-1n);
+  });
+
+  it("is exact when no digits are dropped, whatever the mode", () => {
+    for (const mode of ["trunc", "floor", "ceil", "round"] as const) {
+      expect(convertTokenDecimals(100n, 7, 6, mode)).toBe(10n);
+      expect(convertTokenDecimals(15n, 6, 7, mode)).toBe(150n);
+    }
+  });
+});
+
+describe("convertTokenDecimalsWithRemainder", () => {
+  it("surfaces the remainder truncation would discard", () => {
+    expect(convertTokenDecimalsWithRemainder(15n, 7, 6)).toEqual({
+      value: 1n,
+      remainder: 5n,
+    });
+  });
+
+  it("keeps the remainder independent of the rounding mode", () => {
+    expect(convertTokenDecimalsWithRemainder(15n, 7, 6, "round")).toEqual({
+      value: 2n,
+      remainder: 5n,
+    });
+  });
+
+  it("reports a zero remainder when precision is not reduced", () => {
+    expect(convertTokenDecimalsWithRemainder(15n, 6, 7)).toEqual({
+      value: 150n,
+      remainder: 0n,
+    });
+    expect(convertTokenDecimalsWithRemainder(15n, 7, 7)).toEqual({
+      value: 15n,
+      remainder: 0n,
+    });
+  });
+
+  it("signs the remainder like the source amount", () => {
+    expect(convertTokenDecimalsWithRemainder(-15n, 7, 6)).toEqual({
+      value: -1n,
+      remainder: -5n,
+    });
   });
 });
 

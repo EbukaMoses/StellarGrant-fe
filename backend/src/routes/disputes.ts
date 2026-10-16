@@ -3,9 +3,21 @@ import { DataSource, Repository } from "typeorm";
 import { Dispute } from "../entities/Dispute";
 import { Grant } from "../entities/Grant";
 import { Milestone } from "../entities/Milestone";
+import { Activity } from "../entities/Activity";
 import { RbacService } from "../services/rbac-service";
 import { WebhookDispatcher } from "../services/webhook-dispatcher";
 import { walletLimiters } from "../middlewares/rate-limiter";
+import { authMiddleware } from "../middlewares/auth-middleware";
+import type { AuthenticatedRequest } from "../types/auth";
+
+const isUniqueViolation = (err: unknown): boolean => {
+  const e = err as { code?: string; message?: string } | undefined;
+  return (
+    e?.code === "23505" ||
+    e?.code === "SQLITE_CONSTRAINT" ||
+    /unique constraint|UNIQUE constraint/i.test(e?.message ?? "")
+  );
+};
 
 interface ResolveBody {
   approve_payout: boolean;
@@ -17,7 +29,7 @@ interface ResolveBody {
 interface ArgumentBody {
   role: "contributor" | "funder";
   argument: string;
-  address: string;
+  address?: string;
 }
 
 export const buildDisputesRouter = (
@@ -29,6 +41,7 @@ export const buildDisputesRouter = (
   const disputeRepo: Repository<Dispute> = dataSource.getRepository(Dispute);
   const grantRepo: Repository<Grant> = dataSource.getRepository(Grant);
   const milestoneRepo: Repository<Milestone> = dataSource.getRepository(Milestone);
+  const activityRepo: Repository<Activity> = dataSource.getRepository(Activity);
 
   // GET /disputes — list open disputes (?status=all for all)
   router.get("/", async (req, res, next) => {
@@ -91,46 +104,93 @@ export const buildDisputesRouter = (
 
 
   // POST /disputes/:id/argument — submit contributor or funder argument
-  router.post("/:id/argument", walletLimiters.disputeArgument, async (req, res, next) => {
-    try {
-      const id = Number(req.params.id);
-      if (Number.isNaN(id)) {
-        res.status(400).json({ error: "Invalid dispute id" });
-        return;
-      }
+  router.post(
+    "/:id/argument",
+    authMiddleware as any,
+    walletLimiters.disputeArgument,
+    async (req: AuthenticatedRequest, res, next) => {
+      try {
+        const id = Number(req.params.id);
+        if (Number.isNaN(id)) {
+          res.status(400).json({ error: "Invalid dispute id" });
+          return;
+        }
 
-      const body = req.body as ArgumentBody;
-      if (!body.role || !body.argument || !body.address) {
-        res.status(400).json({ error: "role, argument, and address are required" });
-        return;
-      }
+        const address = req.user?.stellarAddress;
+        if (!address) {
+          res.status(401).json({ error: "Authentication required" });
+          return;
+        }
 
-      const dispute = await disputeRepo.findOne({ where: { id } });
-      if (!dispute) {
-        res.status(404).json({ error: "Dispute not found" });
-        return;
-      }
+        const body = req.body as ArgumentBody;
+        if (!body.role || !body.argument) {
+          res.status(400).json({ error: "role and argument are required" });
+          return;
+        }
+        // Reject attempts to act on behalf of another wallet.
+        if (body.address && body.address !== address) {
+          res.status(403).json({ error: "Address does not match authenticated wallet" });
+          return;
+        }
 
-      if (dispute.status !== "open") {
-        res.status(400).json({ error: "Cannot add argument to a resolved dispute" });
-        return;
-      }
+        const dispute = await disputeRepo.findOne({ where: { id } });
+        if (!dispute) {
+          res.status(404).json({ error: "Dispute not found" });
+          return;
+        }
 
-      if (body.role === "contributor") {
-        dispute.contributorArgument = body.argument;
-      } else if (body.role === "funder") {
-        dispute.funderArgument = body.argument;
-      } else {
-        res.status(400).json({ error: "role must be 'contributor' or 'funder'" });
-        return;
-      }
+        if (dispute.status !== "open") {
+          res.status(400).json({ error: "Cannot add argument to a resolved dispute" });
+          return;
+        }
 
-      const saved = await disputeRepo.save(dispute);
-      res.json({ data: saved });
-    } catch (err) {
-      next(err);
-    }
-  });
+        const grant = await grantRepo.findOne({ where: { id: dispute.grantId } });
+        if (!grant) {
+          res.status(404).json({ error: "Grant not found" });
+          return;
+        }
+
+        // The authenticated wallet must actually hold the role it claims.
+        if (body.role === "contributor") {
+          if (address !== grant.recipient) {
+            res.status(403).json({ error: "Wallet is not the grant recipient" });
+            return;
+          }
+          if (dispute.contributorArgument) {
+            res.status(409).json({ error: "Contributor argument already submitted" });
+            return;
+          }
+          dispute.contributorArgument = body.argument;
+        } else if (body.role === "funder") {
+          const funded = await activityRepo.findOne({
+            where: {
+              type: "grant_funded",
+              entityType: "grant",
+              entityId: grant.id,
+              actorAddress: address,
+            },
+          });
+          if (address !== grant.owner && !funded) {
+            res.status(403).json({ error: "Wallet is not a funder of this grant" });
+            return;
+          }
+          if (dispute.funderArgument) {
+            res.status(409).json({ error: "Funder argument already submitted" });
+            return;
+          }
+          dispute.funderArgument = body.argument;
+        } else {
+          res.status(400).json({ error: "role must be 'contributor' or 'funder'" });
+          return;
+        }
+
+        const saved = await disputeRepo.save(dispute);
+        res.json({ data: saved });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
 
   // POST /disputes/:id/resolve — record resolution (council-only via RBAC)
   router.post("/:id/resolve", async (req, res, next) => {
@@ -291,6 +351,13 @@ export const buildGrantDisputesRouter = (dataSource: DataSource) => {
         const saved = await disputeRepo.save(dispute);
         res.status(201).json({ data: saved });
       } catch (err) {
+        // A concurrent request won the race; the unique constraint rejected ours.
+        if (isUniqueViolation(err)) {
+          res
+            .status(409)
+            .json({ error: "Dispute already exists for this milestone" });
+          return;
+        }
         next(err);
       }
     }

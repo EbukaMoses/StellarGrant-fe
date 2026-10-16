@@ -19,6 +19,7 @@ import { buildCommunitiesRouter } from "./routes/communities";
 import { buildNotificationsRouter } from "./routes/notifications";
 import { buildAdminRouter } from "./routes/admin";
 import { buildAdminMiddleware } from "./middlewares/admin-middleware";
+import { buildSignedUserAuth } from "./middlewares/signed-user-auth";
 import { GrantSyncService } from "./services/grant-sync-service";
 import { SignatureService } from "./services/signature-service";
 import { LeaderboardService } from "./services/leaderboard-service";
@@ -42,6 +43,8 @@ import { WebhookDispatcher } from "./services/webhook-dispatcher";
 import { notificationService } from "./services/notification-service";
 import { buildUserRouter } from "./routes/users";
 import { buildGrantReviewerRouter } from "./routes/grant-reviewers";
+import { NonceService } from "./services/nonce-service";
+import { UsedNonce } from "./entities/UsedNonce";
 import { buildMilestoneApprovalNotifyRouter } from "./routes/milestone-approvals-notify";
 import { buildMilestoneCommentsRouter } from "./routes/milestone-comments";
 import { buildDisputesRouter, buildGrantDisputesRouter } from "./routes/disputes";
@@ -75,10 +78,13 @@ export const createApp = (dataSource: DataSource, sorobanClient: SorobanContract
 
   const grantSyncService = new GrantSyncService(dataSource, sorobanClient);
   const signatureService = new SignatureService();
+  const nonceService = new NonceService(dataSource.getRepository(UsedNonce));
   const leaderboardService = new LeaderboardService(dataSource);
   const responseCacheService = new ResponseCacheService();
   const rbacService = new RbacService(userRepo, roleRepo, userRoleRepo);
-  const adminMiddleware = buildAdminMiddleware(signatureService);
+  const signedUserAuth = buildSignedUserAuth(signatureService, nonceService);
+  const optionalSignedUserAuth = buildSignedUserAuth(signatureService, nonceService, { optional: true });
+  const adminMiddleware = buildAdminMiddleware(signatureService, nonceService);
   const reconciliationService = new ReconciliationService(dataSource, sorobanClient, grantSyncService);
   const webhookDispatcher = new WebhookDispatcher(dataSource);
 
@@ -93,21 +99,22 @@ export const createApp = (dataSource: DataSource, sorobanClient: SorobanContract
       activityRepo,
       reviewerRepo,
       responseCacheService,
+      nonceService,
     ),
   );
-  app.use("/grants", buildGrantDraftsRouter(dataSource, webhookDispatcher));
-  app.use("/milestone_proof", buildMilestoneProofRouter(proofRepo, signatureService, grantRepo, userRepo));
+  app.use("/grants", buildGrantDraftsRouter(dataSource, webhookDispatcher, signedUserAuth));
+  app.use("/milestone_proof", buildMilestoneProofRouter(proofRepo, signatureService, grantRepo, userRepo, nonceService));
   app.use("/search", buildSearchRouter(dataSource));
   app.use("/leaderboard", buildLeaderboardRouter(leaderboardService));
   app.use("/profiles", buildProfilesRouter(contributorRepo, grantRepo));
-  app.use("/my-donations", buildMyDonationsRouter(dataSource));
-  app.use("/communities", buildCommunitiesRouter(communityRepo, grantRepo, activityRepo, rbacService, webhookDispatcher));
+  app.use("/my-donations", buildMyDonationsRouter(dataSource, signedUserAuth));
+  app.use("/communities", optionalSignedUserAuth, buildCommunitiesRouter(communityRepo, grantRepo, activityRepo, rbacService, webhookDispatcher));
   app.use("/notifications", buildNotificationsRouter(contributorRepo));
   app.use("/contributors", buildContributorsRouter(contributorRepo, grantRepo, proofRepo, activityRepo));
   app.use("/ipfs", buildIpfsPresignRouter());
   app.use("/events", buildEventsRouter(activityRepo));
   app.use("/users", buildUserRouter(userRepo));
-  app.use("/grant_reviewers", buildGrantReviewerRouter(reviewerRepo));
+  app.use("/grant_reviewers", buildGrantReviewerRouter(reviewerRepo, signatureService, grantRepo, nonceService));
   app.use("/milestone_approvals_notify", buildMilestoneApprovalNotifyRouter(approvalRepo, grantRepo, userRepo, webhookDispatcher));
   app.use("/disputes", buildDisputesRouter(dataSource, rbacService, webhookDispatcher));
   app.use("/", buildGrantDisputesRouter(dataSource));

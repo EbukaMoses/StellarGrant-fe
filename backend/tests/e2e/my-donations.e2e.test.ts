@@ -1,6 +1,8 @@
 import request from "supertest";
 import { describe, it, beforeAll, afterAll, expect } from "vitest";
 import { DataSource } from "typeorm";
+import { Keypair } from "@stellar/stellar-sdk";
+import { signedUserHeaders } from "../helpers/sign-user";
 import { createApp } from "../../src/app";
 import { DataSourceOptions } from "typeorm";
 import { FeeCollection } from "../../src/entities/FeeCollection";
@@ -15,8 +17,10 @@ import { Community } from "../../src/entities/Community";
 import { Role } from "../../src/entities/Role";
 import { UserRole } from "../../src/entities/UserRole";
 
-const TEST_ADDRESS = "GTESTFUNDERTOKEN123";
-const OTHER_ADDRESS = "GOTHERFUNDERTOKEN456";
+const TEST_KEY = Keypair.random();
+const OTHER_KEY = Keypair.random();
+const TEST_ADDRESS = TEST_KEY.publicKey();
+const OTHER_ADDRESS = OTHER_KEY.publicKey();
 
 // Helper to insert test data
 async function seedDonations(ds: DataSource) {
@@ -94,7 +98,7 @@ describe("GET /my-donations", () => {
   it("returns all donations for the authenticated funder, grouped by token", async () => {
     const res = await request(app)
       .get("/my-donations")
-      .set("x-stellar-address", TEST_ADDRESS)
+      .set(signedUserHeaders(TEST_KEY, "GET", "/my-donations"))
       .expect(200);
     expect(res.body.donations.length).toBe(2);
     expect(res.body.totals.USDC).toBe("100");
@@ -104,12 +108,16 @@ describe("GET /my-donations", () => {
   it("filters donations by token type", async () => {
     const res = await request(app)
       .get("/my-donations?token=USDC")
-      .set("x-stellar-address", TEST_ADDRESS)
+      .set(signedUserHeaders(TEST_KEY, "GET", "/my-donations"))
       .expect(200);
     expect(res.body.donations.length).toBe(1);
     expect(res.body.donations[0].token).toBe("USDC");
     expect(res.body.totals.USDC).toBe("100");
     expect(res.body.totals.XLM).toBeUndefined();
+  });
+
+  it("does not trust a spoofed x-stellar-address header", async () => {
+    await request(app).get("/my-donations").set("x-stellar-address", TEST_ADDRESS).expect(401);
   });
 
   it("returns 401 if not authenticated", async () => {

@@ -14,6 +14,7 @@
 
 import { useMemo } from "react";
 import { formatTokenAmount, getDefaultDecimals } from "@/lib/tokens";
+import { fundingPercent } from "@/lib/utils/funding";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -29,11 +30,6 @@ export interface GrantStatsProps {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function percentFunded(funded: bigint, budget: bigint): number {
-  if (budget === 0n) return 0;
-  return Math.min(100, Math.round(Number((funded * 10000n) / budget) / 100));
-}
 
 type DeadlineState = "ok" | "warning" | "danger";
 
@@ -111,7 +107,7 @@ export function GrantStats({
 }: GrantStatsProps) {
   const decimals = getDefaultDecimals(token);
   const pct = useMemo(
-    () => percentFunded(fundedAmount, totalBudget),
+    () => fundingPercent(fundedAmount, totalBudget),
     [fundedAmount, totalBudget]
   );
 
@@ -123,7 +119,7 @@ export function GrantStats({
   const fundedStr = `${formatTokenAmount(fundedAmount, decimals, {
     symbol: token,
     showSymbol: true,
-  })} — ${pct}%`;
+  })} — ${pct.toFixed(1)}%`;
 
   const milestonesStr =
     milestoneCount > 0

@@ -1,11 +1,15 @@
 /**
- * Server-side helpers for the Next.js API proxy layer (Issue #371).
+ * Server-side helpers for the Next.js API proxy layer (Issue #371 / #1260).
  *
  * Every proxy route in `app/api/*` forwards to the Express backend through
  * `proxyGet`. The backend URL is read from the *private* `API_URL` env var
  * (with a fallback to the legacy `NEXT_PUBLIC_API_URL` for environments that
  * still set it) so it never reaches client-side JavaScript. An optional shared
  * secret is forwarded as `X-Internal-Secret`.
+ *
+ * Client components must call same-origin `/api/...` routes — never
+ * `NEXT_PUBLIC_API_URL` / `API_URL` directly — so the secret header and
+ * server-only base URL stay behind this proxy.
  *
  * Upstream errors are normalised into a stable JSON shape:
  *   { error: string, code: string, status: number }

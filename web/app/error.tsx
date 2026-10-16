@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import { StarField } from "@/components/landing/StarField";
+import { toUserFacingErrorMessage } from "@/lib/errors/userFacingMessage";
 
 interface ErrorPageProps {
   error: Error & { digest?: string };
@@ -16,7 +17,9 @@ export default function ErrorPage({ error, reset }: ErrorPageProps) {
     console.error("[ErrorBoundary]", error);
   }, [error]);
 
-  const message = error.message?.slice(0, 200) ?? "An unexpected error occurred.";
+  // Shared with the root boundary (global-error.tsx): bounded in every
+  // environment, digest-only in production.
+  const message = toUserFacingErrorMessage(error);
 
   return (
     <div className="relative min-h-screen bg-bg-primary flex items-center justify-center overflow-hidden">

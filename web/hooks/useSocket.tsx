@@ -36,22 +36,30 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [connected, setConnected] = useState(false);
   const [lastNotification, setLastNotification] = useState<Notification | null>(null);
   const socketRef = useRef<SocketInstance | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    const scheduleStateUpdate = (fn: () => void) => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+      timeoutRef.current = setTimeout(fn, 0);
+    };
+
     if (!address) {
       if (socketRef.current) {
         socketRef.current.disconnect();
         socketRef.current = null;
-        setTimeout(() => {
+        scheduleStateUpdate(() => {
           setSocketState(null);
           setConnected(false);
-        }, 0);
+        });
       }
       return;
     }
 
     const socketUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
-    
+
     const newSocket = io(socketUrl, {
       query: { address },
       reconnectionAttempts: 5,
@@ -74,17 +82,21 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
 
     socketRef.current = newSocket;
-    setTimeout(() => {
+    scheduleStateUpdate(() => {
       setSocketState(newSocket);
-    }, 0);
+    });
 
     return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
       if (socketRef.current) {
         socketRef.current.disconnect();
         socketRef.current = null;
-        setTimeout(() => {
+        scheduleStateUpdate(() => {
           setSocketState(null);
-        }, 0);
+        });
       }
     };
   }, [address]);

@@ -9,6 +9,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { fundingPercent } from "@/lib/utils/funding";
 import { formatTokenAmount, getTokenMetadata, TokenMetadata } from "@/lib/tokens";
 
 interface TokenBreakdown {
@@ -38,11 +39,7 @@ export function FundingProgress({
   const currentBigInt = typeof current === "bigint" ? current : BigInt(Math.round(current));
   const targetBigInt = typeof target === "bigint" ? target : BigInt(Math.round(target));
 
-  const percentage = targetBigInt > 0n
-    ? Number((currentBigInt * 100n) / targetBigInt)
-    : 0;
-
-  const safePercentage = Math.min(percentage, 100);
+  const safePercentage = fundingPercent(currentBigInt, targetBigInt);
 
   useEffect(() => {
     async function fetchMetadata() {

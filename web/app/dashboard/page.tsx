@@ -81,16 +81,20 @@ function DashboardContent() {
   // Load wallet info (balance + reputation) when address changes
   useEffect(() => {
     if (!address) return;
+    const walletAddress = address;
 
     const controller = new AbortController();
     
     async function loadWalletInfo() {
       try {
-        const baseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
-        const res = await fetch(`${baseUrl}/wallet/${address}/info`, {
-          signal: controller.signal,
-          cache: "no-store",
-        });
+        // Route through the Next.js API proxy so X-Internal-Secret stays server-side.
+        const res = await fetch(
+          `/api/wallet/${encodeURIComponent(walletAddress)}/info`,
+          {
+            signal: controller.signal,
+            cache: "no-store",
+          },
+        );
         if (res.ok) {
           const data = await res.json() as { balance?: number; reputation?: number };
           if (typeof data.balance === "number") setBalance(BigInt(Math.round(data.balance)));
@@ -110,17 +114,20 @@ function DashboardContent() {
     setLoading(true);
     setGrants([]);
     try {
-      const baseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
-      const endpoint =
+      const params = new URLSearchParams(
         tab === "my-grants"
-          ? `/grants?owner=${addr}`
+          ? { owner: addr }
           : tab === "funding"
-          ? `/grants?funder=${addr}`
-          : `/grants?reviewer=${addr}`;
-      const res = await fetch(`${baseUrl}${endpoint}`, { cache: "no-store" });
+            ? { funder: addr }
+            : { reviewer: addr },
+      );
+      // Same-origin proxy — never hit NEXT_PUBLIC_API_URL from the browser.
+      const res = await fetch(`/api/grants?${params.toString()}`, {
+        cache: "no-store",
+      });
       if (res.ok) {
-        const data = await res.json() as { grants?: Grant[] };
-        setGrants(data.grants ?? []);
+        const data = await res.json() as { grants?: Grant[]; data?: Grant[] };
+        setGrants(data.grants ?? data.data ?? []);
       }
     } catch {
       // API unavailable — show empty state

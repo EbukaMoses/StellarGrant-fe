@@ -8,6 +8,10 @@ import { GrantStatusBadge } from "@/components/grants/GrantStatusBadge";
 import { useWalletStore } from "@/lib/store/walletStore";
 import { useFundGrant } from "@/hooks/useFundGrant";
 import { stellarExplorerTx } from "@/lib/constants";
+import {
+  fetchGrantFundingState,
+  remainingCapacity,
+} from "@/lib/grants/funding";
 import { Grant } from "@/types";
 
 // ── Wallet guard ──────────────────────────────────────────────────────────────
@@ -104,26 +108,50 @@ export function FundGrantClient({ grantId }: FundGrantClientProps) {
 
   const unfundedStroops = grant ? grant.budget - grant.funded : 0n;
 
-  const validate = useCallback((): boolean => {
-    const stroops = xlmToStroops(amountInput);
-    if (stroops <= 0n) {
-      setValidationError("Amount must be at least 1 stroop (0.0000001 XLM).");
-      return false;
-    }
-    if (stroops > unfundedStroops) {
-      setValidationError(
-        `Amount exceeds the remaining unfunded balance (${stroopsToXlm(unfundedStroops)} XLM).`
-      );
-      return false;
-    }
-    setValidationError(null);
-    return true;
-  }, [amountInput, unfundedStroops]);
+  const validate = useCallback(
+    (remaining: bigint): boolean => {
+      const stroops = xlmToStroops(amountInput);
+      if (stroops <= 0n) {
+        setValidationError("Amount must be at least 1 stroop (0.0000001 XLM).");
+        return false;
+      }
+      if (remaining === 0n) {
+        setValidationError("This grant is already fully funded.");
+        return false;
+      }
+      if (stroops > remaining) {
+        setValidationError(
+          `Amount exceeds the remaining unfunded balance (${stroopsToXlm(remaining)} XLM).`,
+        );
+        return false;
+      }
+      setValidationError(null);
+      return true;
+    },
+    [amountInput],
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     resetFund();
-    if (!validate()) return;
+
+    // Re-fetch immediately before submit to avoid stale funding-cap races.
+    const fresh = await fetchGrantFundingState(grantId);
+    if (!fresh) {
+      setValidationError(
+        "Could not verify current funding status. Please try again.",
+      );
+      return;
+    }
+
+    setGrant((prev) =>
+      prev
+        ? { ...prev, budget: fresh.budget, funded: fresh.funded }
+        : prev,
+    );
+
+    const remaining = remainingCapacity(fresh);
+    if (!validate(remaining)) return;
 
     const stroops = xlmToStroops(amountInput);
     try {

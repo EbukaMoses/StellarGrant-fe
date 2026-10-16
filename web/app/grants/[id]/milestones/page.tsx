@@ -67,8 +67,8 @@ export default function MilestonesPage({ params }: MilestonesPageProps) {
     const loadGrant = async () => {
       try {
         setLoading(true);
-        const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-        const response = await fetch(`${baseUrl}/grants/${id}`, {
+        // Same-origin proxy — never hit NEXT_PUBLIC_API_URL from the browser.
+        const response = await fetch(`/api/grants/${encodeURIComponent(id)}`, {
           signal: controller.signal,
           cache: "no-store",
         });
@@ -78,9 +78,13 @@ export default function MilestonesPage({ params }: MilestonesPageProps) {
         }
 
         const payload = await response.json();
-        const raw: MilestoneResponse[] = payload.data?.milestones ?? [];
+        // Proxy route returns { grant, milestones }; some backends wrap as { data }.
+        const raw: MilestoneResponse[] =
+          payload.milestones ?? payload.data?.milestones ?? [];
         setMilestones(raw.map(normaliseMilestone));
-        setTitle(payload.data?.title ?? `Grant #${id}`);
+        setTitle(
+          payload.grant?.title ?? payload.data?.title ?? `Grant #${id}`,
+        );
         setError(null);
       } catch (err) {
         if (controller.signal.aborted) return;

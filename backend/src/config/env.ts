@@ -20,6 +20,10 @@ export const env = {
   ipfsGateway: process.env.PINATA_GATEWAY ?? "https://gateway.pinata.cloud",
   corsOrigins: process.env.CORS_ORIGIN ?? "*",
   jwtSecret: process.env.JWT_SECRET ?? "",
+  // #1229 — key used to encrypt sensitive columns at rest (falls back to JWT_SECRET).
+  fieldEncryptionKey: process.env.FIELD_ENCRYPTION_KEY ?? process.env.JWT_SECRET ?? "",
+  // #1240 — configurable log level for winston
+  logLevel: process.env.LOG_LEVEL ?? "info",
   rateLimitAlertWindowMinutes: Number(process.env.RATE_LIMIT_ALERT_WINDOW_MINUTES ?? 5),
   rateLimitAlertThreshold: Number(process.env.RATE_LIMIT_ALERT_THRESHOLD ?? 100),
   rateLimitAlertCooldownMinutes: Number(process.env.RATE_LIMIT_ALERT_COOLDOWN_MINUTES ?? 15),

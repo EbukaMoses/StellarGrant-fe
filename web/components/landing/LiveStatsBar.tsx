@@ -23,12 +23,8 @@ export const LiveStatsBar = () => {
         setStats(data);
       } catch (err) {
         console.error("Stats fetch error:", err);
-        // Fallback for demo purposes if API is down
-        setStats({
-          totalGrants: 124,
-          totalFunded: 450000,
-          milestonesCompleted: 892,
-        });
+        // Never substitute fabricated numbers; hide the bar instead.
+        setStats(null);
       } finally {
         setLoading(false);
       }
@@ -36,6 +32,9 @@ export const LiveStatsBar = () => {
 
     fetchStats();
   }, []);
+
+  // Stats unavailable (fetch failed): render nothing rather than fake data.
+  if (!loading && !stats) return null;
 
   return (
     <div className="w-full bg-bg-secondary border-y border-border-color py-8">

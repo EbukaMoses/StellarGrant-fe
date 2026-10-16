@@ -42,6 +42,12 @@ export function calculatePercentage(current: number, total: number): number {
   return Math.min((current / total) * 100, 100);
 }
 
+export {
+  QUORUM_THRESHOLD,
+  requiredApprovals,
+  quorumReached,
+} from "./quorum";
+
 // Optimistic UI state management
 export {
   TransactionTracker,

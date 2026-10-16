@@ -1,11 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useContractTransaction } from "@/hooks/useContractTransaction";
 import { contractClient } from "@/lib/stellar/contract";
 import { ProofViewer } from "@/components/milestones/ProofViewer";
 import RichTextRenderer from "@/components/ui/RichTextRenderer";
-import { formatTokenAmount } from "@/lib/tokens/utils";
+import {
+  formatTokenAmount,
+  getTokenMetadata,
+  type TokenMetadata,
+} from "@/lib/tokens";
 import { useWalletStore } from "@/lib/store/walletStore";
 import { toast } from "@/lib/toast";
 
@@ -15,8 +19,8 @@ interface DisputePanelProps {
   milestoneIdx: number;
   milestoneTitle: string;
   proofHash: string;
-  contributorArgument: string | null;  // from API metadata
-  funderArgument: string | null;       // from API metadata
+  contributorArgument: string | null; // from API metadata
+  funderArgument: string | null; // from API metadata
   fundedAmount: bigint;
   token: string;
   priorVotes: { approved: number; rejected: number };
@@ -37,12 +41,28 @@ export function DisputePanel({
   onResolved,
 }: DisputePanelProps) {
   const { address: councilAddress } = useWalletStore();
-  const { execute, isPending, isSimulating, error: txError, reset } = useContractTransaction();
-  const [confirmingAction, setConfirmingAction] = useState<"approve" | "refund" | null>(null);
+  const {
+    execute,
+    isPending,
+    isSimulating,
+    error: txError,
+    reset,
+  } = useContractTransaction();
+  const [confirmingAction, setConfirmingAction] = useState<
+    "approve" | "refund" | null
+  >(null);
+  const [tokenMetadata, setTokenMetadata] = useState<TokenMetadata | null>(
+    null,
+  );
 
-  const isXlm = token.toLowerCase() === "native" || token.length < 10;
-  const decimals = isXlm ? 7 : 6;
-  const symbol = isXlm ? "XLM" : "USDC";
+  useEffect(() => {
+    getTokenMetadata(token)
+      .then(setTokenMetadata)
+      .catch(() => setTokenMetadata(null));
+  }, [token]);
+
+  const decimals = tokenMetadata?.decimals ?? 7;
+  const symbol = tokenMetadata?.symbol ?? "TOKEN";
 
   const formattedAmount = formatTokenAmount(fundedAmount, decimals, {
     symbol,
@@ -53,7 +73,8 @@ export function DisputePanel({
     if (!councilAddress) {
       toast({
         title: "Wallet Not Connected",
-        description: "Connect your wallet as a Council member to resolve disputes.",
+        description:
+          "Connect your wallet as a Council member to resolve disputes.",
         variant: "error",
       });
       return;
@@ -102,7 +123,10 @@ export function DisputePanel({
             {grantTitle}
           </h3>
           <p className="font-mono text-xs text-text-muted mt-1">
-            Milestone #{milestoneIdx + 1}: <span className="text-text-primary font-semibold">{milestoneTitle}</span>
+            Milestone #{milestoneIdx + 1}:{" "}
+            <span className="text-text-primary font-semibold">
+              {milestoneTitle}
+            </span>
           </p>
         </div>
         <div className="text-right shrink-0">
@@ -121,8 +145,12 @@ export function DisputePanel({
           Milestone Vote Before Dispute:
         </span>
         <div className="flex gap-3">
-          <span className="text-success font-semibold">✓ {priorVotes.approved} approved</span>
-          <span className="text-danger font-semibold">✗ {priorVotes.rejected} rejected</span>
+          <span className="text-success font-semibold">
+            ✓ {priorVotes.approved} approved
+          </span>
+          <span className="text-danger font-semibold">
+            ✗ {priorVotes.rejected} rejected
+          </span>
         </div>
       </div>
 
@@ -132,7 +160,9 @@ export function DisputePanel({
         <div className="p-4 border border-border-color/20 bg-surface/10 space-y-3">
           <h4 className="font-orbitron text-xs font-bold text-success uppercase tracking-widest border-b border-border-color/10 pb-2 flex items-center justify-between">
             <span>Contributor Argument</span>
-            <span className="text-[10px] text-text-muted normal-case font-mono font-normal">Claim Payout</span>
+            <span className="text-[10px] text-text-muted normal-case font-mono font-normal">
+              Claim Payout
+            </span>
           </h4>
           <div className="text-text-muted text-[11px] leading-relaxed max-h-[150px] overflow-y-auto pr-1">
             {contributorArgument ? (
@@ -147,7 +177,9 @@ export function DisputePanel({
         <div className="p-4 border border-border-color/20 bg-surface/10 space-y-3">
           <h4 className="font-orbitron text-xs font-bold text-danger uppercase tracking-widest border-b border-border-color/10 pb-2 flex items-center justify-between">
             <span>Funder Argument</span>
-            <span className="text-[10px] text-text-muted normal-case font-mono font-normal">Request Refund</span>
+            <span className="text-[10px] text-text-muted normal-case font-mono font-normal">
+              Request Refund
+            </span>
           </h4>
           <div className="text-text-muted text-[11px] leading-relaxed max-h-[150px] overflow-y-auto pr-1">
             {funderArgument ? (
@@ -195,13 +227,25 @@ export function DisputePanel({
               <p className="text-text-muted text-[11px]">
                 {confirmingAction === "approve" ? (
                   <>
-                    You are resolving this dispute in favor of the <span className="text-success font-semibold">Contributor</span>.
-                    This will release the escrowed stake of <span className="text-text-primary font-bold">{formattedAmount}</span> to the contributor&apos;s payout address.
+                    You are resolving this dispute in favor of the{" "}
+                    <span className="text-success font-semibold">
+                      Contributor
+                    </span>
+                    . This will release the escrowed stake of{" "}
+                    <span className="text-text-primary font-bold">
+                      {formattedAmount}
+                    </span>{" "}
+                    to the contributor&apos;s payout address.
                   </>
                 ) : (
                   <>
-                    You are resolving this dispute in favor of the <span className="text-danger font-semibold">Funders</span>.
-                    This will claw back the milestone allocation of <span className="text-text-primary font-bold">{formattedAmount}</span> and make it refundable to the original funders.
+                    You are resolving this dispute in favor of the{" "}
+                    <span className="text-danger font-semibold">Funders</span>.
+                    This will claw back the milestone allocation of{" "}
+                    <span className="text-text-primary font-bold">
+                      {formattedAmount}
+                    </span>{" "}
+                    and make it refundable to the original funders.
                   </>
                 )}
               </p>
@@ -218,8 +262,8 @@ export function DisputePanel({
                 {isSimulating
                   ? "Simulating resolution..."
                   : isPending
-                  ? "Signing & broadcasting transaction..."
-                  : "Freighter wallet signature required."}
+                    ? "Signing & broadcasting transaction..."
+                    : "Freighter wallet signature required."}
               </span>
               <div className="flex gap-2">
                 <button
@@ -239,7 +283,9 @@ export function DisputePanel({
                   onClick={() => handleResolve(confirmingAction === "approve")}
                   className="px-4 py-2 bg-accent-primary text-black font-bold hover:bg-accent-primary/80 transition-colors disabled:opacity-50 flex items-center gap-2"
                 >
-                  {isBusy && <div className="h-3 w-3 animate-spin rounded-full border border-black border-t-transparent" />}
+                  {isBusy && (
+                    <div className="h-3 w-3 animate-spin rounded-full border border-black border-t-transparent" />
+                  )}
                   Confirm
                 </button>
               </div>

@@ -8,7 +8,10 @@ import type { TokenMetadata as _TokenMetadata } from "@/types";
 
 /**
  * Format a token amount for display
- * @param amount - The raw amount (in smallest units, e.g., stroops)
+ * @param amount - The raw amount (in smallest units, e.g., stroops). Pass a
+ *   bigint or numeric string for values that may exceed Number.MAX_SAFE_INTEGER;
+ *   unsafe `number` inputs are rejected as "Invalid" rather than silently
+ *   formatted with lost precision.
  * @param decimals - Number of decimals for the token
  * @param options - Formatting options
  * @returns Formatted amount string
@@ -41,7 +44,12 @@ export function formatTokenAmount(
       return showSymbol && symbol ? `Invalid ${symbol}` : "Invalid";
     }
   } else {
-    // number - convert carefully to avoid precision loss
+    // A number above MAX_SAFE_INTEGER has already lost precision before it
+    // reaches us, so rounding cannot recover it. Callers must pass a bigint
+    // or numeric string for amounts that may exceed the safe range.
+    if (!Number.isFinite(amount) || Math.abs(amount) > Number.MAX_SAFE_INTEGER) {
+      return showSymbol && symbol ? `Invalid ${symbol}` : "Invalid";
+    }
     amountBigInt = BigInt(Math.round(amount));
   }
 
@@ -114,16 +122,74 @@ export function parseTokenAmount(amount: string, decimals: number): bigint {
 }
 
 /**
- * Convert amount between different decimal precision
- * @param amount - Raw amount
+ * Rounding modes for precision-*reducing* token conversions.
+ *
+ * - `"trunc"` — truncate toward zero (default, historical behaviour)
+ * - `"floor"` — round toward −Infinity
+ * - `"ceil"` — round toward +Infinity
+ * - `"round"` — half away from zero
+ */
+export type TokenRoundingMode = "trunc" | "floor" | "ceil" | "round";
+
+/**
+ * Divide `value` by a positive `divisor`, applying `mode` to the digits that
+ * plain BigInt division would discard (BigInt division truncates toward zero).
+ */
+function divideWithRounding(
+  value: bigint,
+  divisor: bigint,
+  mode: TokenRoundingMode
+): bigint {
+  const quotient = value / divisor;
+  const remainder = value % divisor;
+  if (remainder === 0n || mode === "trunc") return quotient;
+
+  if (mode === "floor") return value < 0n ? quotient - 1n : quotient;
+  if (mode === "ceil") return value > 0n ? quotient + 1n : quotient;
+
+  // "round": half away from zero — ties resolve away from zero in both
+  // directions so ±x.5 rounds to ±(x+1).
+  const magnitude = remainder < 0n ? -remainder : remainder;
+  const half = divisor / 2n + (divisor % 2n); // ceil(divisor / 2)
+  if (magnitude < half) return quotient;
+  return value < 0n ? quotient - 1n : quotient + 1n;
+}
+
+/**
+ * Convert amount between different decimal precision.
+ *
+ * Precision-increasing conversions (`toDecimals > fromDecimals`) multiply by
+ * a power of ten and are always exact, regardless of `rounding`.
+ *
+ * Precision-*reducing* conversions divide by a power of ten, and BigInt
+ * division discards the remainder. That discarded remainder is now an
+ * explicit, documented decision via `rounding`:
+ *
+ * - `"trunc"` (**default**) — truncate toward zero: the dropped digits are
+ *   silently discarded. This is lossy — repeated conversions (e.g. in a
+ *   loop) accumulate value loss — and is retained only as the function's
+ *   historical behaviour. Prefer a non-lossy mode where the result is shown
+ *   to, or settled with, a user.
+ * - `"floor"` — round toward −Infinity (a positive amount never grows).
+ * - `"ceil"` — round toward +Infinity (nothing owed to a recipient is dusted
+ *   away).
+ * - `"round"` — half away from zero (conventional display/settlement
+ *   rounding).
+ *
+ * Where the discarded value matters financially, use
+ * {@link convertTokenDecimalsWithRemainder} to read the exact remainder.
+ *
+ * @param amount - Raw amount in `fromDecimals` smallest units
  * @param fromDecimals - Source token decimals
  * @param toDecimals - Target token decimals
+ * @param rounding - How dropped digits are handled when precision is reduced
  * @returns Converted amount as bigint
  */
 export function convertTokenDecimals(
   amount: bigint,
   fromDecimals: number,
-  toDecimals: number
+  toDecimals: number,
+  rounding: TokenRoundingMode = "trunc"
 ): bigint {
   if (fromDecimals === toDecimals) {
     return amount;
@@ -133,8 +199,48 @@ export function convertTokenDecimals(
   if (diff > 0) {
     return amount * (10n ** BigInt(diff));
   } else {
-    return amount / (10n ** BigInt(Math.abs(diff)));
+    return divideWithRounding(amount, 10n ** BigInt(Math.abs(diff)), rounding);
   }
+}
+
+/** Result of {@link convertTokenDecimalsWithRemainder}. */
+export interface ConvertedTokenAmount {
+  /** Converted amount, rounded according to `rounding`. */
+  value: bigint;
+  /**
+   * The portion of `amount` plain truncation discards (`amount % divisor`),
+   * signed like `amount`, expressed in the *source* token's smallest units.
+   * `0n` whenever no precision was lost.
+   */
+  remainder: bigint;
+}
+
+/**
+ * Convert between decimal precisions and surface the value that truncation
+ * would otherwise discard, so callers can log, warn on, or account for the
+ * difference when it matters financially.
+ *
+ * `remainder` is always computed against truncation, independent of the
+ * `rounding` mode applied to `value`.
+ */
+export function convertTokenDecimalsWithRemainder(
+  amount: bigint,
+  fromDecimals: number,
+  toDecimals: number,
+  rounding: TokenRoundingMode = "trunc"
+): ConvertedTokenAmount {
+  if (fromDecimals === toDecimals || toDecimals > fromDecimals) {
+    return {
+      value: convertTokenDecimals(amount, fromDecimals, toDecimals, rounding),
+      remainder: 0n,
+    };
+  }
+
+  const divisor = 10n ** BigInt(fromDecimals - toDecimals);
+  return {
+    value: divideWithRounding(amount, divisor, rounding),
+    remainder: amount % divisor,
+  };
 }
 
 /**

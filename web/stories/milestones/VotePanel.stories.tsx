@@ -69,6 +69,6 @@ export const QuorumReached: Story = {
     milestoneIdx: 0,
     reviewers: REVIEWERS,
     quorum: 2,
-    threshold: 0.67,
+    threshold: 0.5,
   },
 };

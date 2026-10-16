@@ -26,6 +26,7 @@ import { UserWatchlist } from "../entities/UserWatchlist";
 import { WebhookDeliveryLog } from "../entities/WebhookDeliveryLog";
 import { WebhookSubscription } from "../entities/WebhookSubscription";
 import { GrantFeedback } from "../entities/GrantFeedback";
+import { UsedNonce } from "../entities/UsedNonce";
 
 const entities = [
   Activity,
@@ -51,9 +52,13 @@ const entities = [
   User,
   UserRole,
   UserWatchlist,
+  UsedNonce,
   WebhookDeliveryLog,
   WebhookSubscription,
 ];
+
+export const shouldSynchronize = (nodeEnv: string = env.nodeEnv) =>
+  nodeEnv !== "production";
 
 export const buildDataSource = (databaseUrl = env.databaseUrl) =>
   new DataSource({
@@ -62,5 +67,6 @@ export const buildDataSource = (databaseUrl = env.databaseUrl) =>
       ? { location: databaseUrl.replace("sqljs://", ""), autoSave: false }
       : { url: databaseUrl }),
     entities,
-    synchronize: true,
+    // Never let TypeORM auto-alter a production schema; use migrations there.
+    synchronize: shouldSynchronize(),
   });

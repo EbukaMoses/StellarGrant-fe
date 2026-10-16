@@ -1,9 +1,14 @@
+import { createHash } from "node:crypto";
 import { Request, Response, NextFunction } from "express";
 import { env } from "../config/env";
 import { SignatureService } from "../services/signature-service";
+import { NonceReplayError, NonceService } from "../services/nonce-service";
 
-export const buildAdminMiddleware = (signatureService: SignatureService) => {
-  return (req: Request, res: Response, next: NextFunction) => {
+export const buildAdminMiddleware = (
+  signatureService: SignatureService,
+  nonceService: NonceService,
+) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
     const address = req.header("x-admin-address");
     const signature = req.header("x-admin-signature");
     const nonce = req.header("x-admin-nonce");
@@ -36,6 +41,19 @@ export const buildAdminMiddleware = (signatureService: SignatureService) => {
 
     if (!isValid) {
       res.status(401).json({ error: "Invalid admin signature" });
+      return;
+    }
+
+    // One-time use: a captured signed request cannot be replayed (#1204).
+    try {
+      const scoped = createHash("sha256").update(`${address}:${nonce}`).digest("hex");
+      await nonceService.consume(`admin:${scoped}`);
+    } catch (err) {
+      if (err instanceof NonceReplayError) {
+        res.status(401).json({ error: "Admin nonce has already been used" });
+        return;
+      }
+      next(err);
       return;
     }
 

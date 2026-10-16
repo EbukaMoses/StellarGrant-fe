@@ -10,6 +10,7 @@
  * - 2 (In Progress) → warning border + text
  * - 3 (Completed)   → success border + text
  * - 4 (Cancelled)   → danger border + text
+ * - 5 (Disputed)    → danger border + tinted background
  */
 
 interface GrantStatusBadgeProps {
@@ -36,6 +37,10 @@ const statusConfig: Record<number, { label: string; classes: string }> = {
   4: {
     label: "Cancelled",
     classes: "border border-danger/40 text-danger",
+  },
+  5: {
+    label: "Disputed",
+    classes: "border border-danger/60 bg-danger/10 text-danger",
   },
 };
 

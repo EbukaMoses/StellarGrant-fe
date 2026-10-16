@@ -30,6 +30,8 @@ export interface ApiGrantDetail {
   status: string;
   recipient: string;
   totalAmount: string;
+  /** Funding token — "native"/XLM, "USDC", or a SAC contract address. */
+  token?: string;
   updatedAt?: string;
   isWatched?: boolean;
   milestones?: ApiEnrichedMilestone[];
@@ -38,6 +40,25 @@ export interface ApiGrantDetail {
     submitted: number;
     overdue: number;
   };
+}
+
+/**
+ * Normalise API token labels to the frontend sentinel values.
+ * Mock/backend may return "XLM"; the app uses "native" for XLM.
+ */
+export function normalizeGrantToken(token: string | undefined | null): string {
+  if (!token || token.trim() === "") return "native";
+  const trimmed = token.trim();
+  if (trimmed.toLowerCase() === "xlm" || trimmed.toLowerCase() === "native") {
+    return "native";
+  }
+  return trimmed;
+}
+
+function resolveGrantToken(data: ApiGrantDetail): string {
+  if (data.token) return normalizeGrantToken(data.token);
+  const milestoneToken = data.milestones?.find((m) => m.token)?.token;
+  return normalizeGrantToken(milestoneToken);
 }
 
 export interface GrantDetailPayload {
@@ -117,7 +138,7 @@ export function mapApiGrantDetail(data: ApiGrantDetail, funded = 0n): GrantDetai
     created_at: data.updatedAt
       ? BigInt(Math.floor(new Date(data.updatedAt).getTime() / 1000))
       : 0n,
-    token: "native",
+    token: resolveGrantToken(data),
   };
 
   const completedMilestones =
@@ -133,7 +154,7 @@ export function mapApiGrantDetail(data: ApiGrantDetail, funded = 0n): GrantDetai
 }
 
 export async function fetchGrantById(id: string): Promise<GrantDetailPayload | null> {
-  const res = await fetch(`${API_URL}/grants/${id}`, {
+  const res = await fetch(`${API_URL}/grants/${encodeURIComponent(id)}`, {
     next: { revalidate: 60 },
   });
   if (!res.ok) return null;
@@ -155,9 +176,12 @@ export async function fetchGrantById(id: string): Promise<GrantDetailPayload | n
 }
 
 export async function fetchGrantReviewers(grantId: string): Promise<string[]> {
-  const res = await fetch(`${API_URL}/grant_reviewers/grant/${grantId}`, {
-    next: { revalidate: 60 },
-  });
+  const res = await fetch(
+    `${API_URL}/grant_reviewers/grant/${encodeURIComponent(grantId)}`,
+    {
+      next: { revalidate: 60 },
+    }
+  );
   if (!res.ok) return [];
   const json = (await res.json()) as {
     data?: Array<{ reviewerStellarAddress: string }>;
@@ -166,9 +190,12 @@ export async function fetchGrantReviewers(grantId: string): Promise<string[]> {
 }
 
 export async function fetchGrantFunders(grantId: string): Promise<FunderRow[]> {
-  const res = await fetch(`${API_URL}/grants/${grantId}/funders`, {
-    next: { revalidate: 30 },
-  });
+  const res = await fetch(
+    `${API_URL}/grants/${encodeURIComponent(grantId)}/funders`,
+    {
+      next: { revalidate: 30 },
+    }
+  );
   if (!res.ok) return [];
   const json = (await res.json()) as {
     data?: Array<{ address: string; amount: string }>;

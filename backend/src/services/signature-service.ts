@@ -28,7 +28,47 @@ export type FeedbackIntent = {
   signature: string;
 };
 
+/** Signed intent for grant-owner actions such as adding a reviewer (#1238). */
+export type AddReviewerIntent = {
+  grantId: number;
+  reviewerStellarAddress: string;
+  address: string;
+  nonce: string;
+  timestamp: number;
+  signature: string;
+};
+
+/** Signed proof that a caller controls `address`, scoped to one method+path. */
+export type UserIntent = {
+  address: string;
+  nonce: string;
+  timestamp: number;
+  action: string;
+  signature: string;
+};
+
 export class SignatureService {
+  buildUserIntentMessage(payload: Omit<UserIntent, "signature">): string {
+    return [
+      "stellargrant:user:v1",
+      payload.address,
+      payload.nonce,
+      payload.timestamp,
+      payload.action,
+    ].join("|");
+  }
+
+  verifyUser(payload: UserIntent): boolean {
+    if (!StrKey.isValidEd25519PublicKey(payload.address)) {
+      return false;
+    }
+    const keypair = Keypair.fromPublicKey(payload.address);
+    return keypair.verify(
+      Buffer.from(this.buildUserIntentMessage(payload), "utf8"),
+      Buffer.from(payload.signature, "base64"),
+    );
+  }
+
   buildIntentMessage(payload: Omit<MilestoneProofIntent, "signature">): string {
     return [
       "stellargrant:milestone_proof:v1",
@@ -61,6 +101,29 @@ export class SignatureService {
       payload.nonce,
       payload.timestamp,
     ].join("|");
+  }
+
+  buildAddReviewerIntentMessage(payload: Omit<AddReviewerIntent, "signature">): string {
+    return [
+      "stellargrant:add_reviewer:v1",
+      payload.grantId,
+      payload.reviewerStellarAddress,
+      payload.address,
+      payload.nonce,
+      payload.timestamp,
+    ].join("|");
+  }
+
+  verifyAddReviewer(payload: AddReviewerIntent): boolean {
+    if (!StrKey.isValidEd25519PublicKey(payload.address)) {
+      return false;
+    }
+    const keypair = Keypair.fromPublicKey(payload.address);
+    const message = this.buildAddReviewerIntentMessage(payload);
+    return keypair.verify(
+      Buffer.from(message, "utf8"),
+      Buffer.from(payload.signature, "base64"),
+    );
   }
 
   verify(payload: MilestoneProofIntent | FeedbackIntent): boolean {

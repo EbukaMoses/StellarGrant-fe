@@ -21,6 +21,8 @@ export type SorobanGrant = {
   recipient: string;
   totalAmount: string;
   owner?: string;
+  /** Funding token — "native" or a Stellar asset/SAC address. */
+  token?: string;
   milestones?: SorobanMilestone[];
 };
 

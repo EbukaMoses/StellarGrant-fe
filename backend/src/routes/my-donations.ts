@@ -1,16 +1,23 @@
-import { Router, Response } from "express";
+import { Router, Response, RequestHandler } from "express";
 import { FeeCollection } from "../entities/FeeCollection";
 import { Grant } from "../entities/Grant";
 import { DataSource, In } from "typeorm";
-import { authMiddleware } from "../middlewares/auth-middleware";
 import { AuthenticatedRequest } from "../types/auth";
 
-export function buildMyDonationsRouter(dataSource: DataSource) {
+/**
+ * `auth` must be a signature-verifying middleware that sets req.user.stellarAddress
+ * (#1207); the header-trusting authMiddleware must never be used here.
+ */
+export function buildMyDonationsRouter(dataSource: DataSource, auth: RequestHandler) {
   const router = Router();
 
   // GET /?token=TOKEN_SYMBOL
-  router.get("/", authMiddleware, async (req: any, res: Response) => {
+  router.get("/", auth, async (req: any, res: Response) => {
     const funderAddress = req.user?.stellarAddress;
+    if (!funderAddress) {
+      res.status(401).json({ error: "Signed authentication required" });
+      return;
+    }
 
     const token = req.query.token as string | undefined;
     const feeRepo = dataSource.getRepository(FeeCollection);

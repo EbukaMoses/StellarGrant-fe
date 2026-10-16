@@ -23,6 +23,12 @@ describe('GrantStatusBadge', () => {
     expect(screen.getByText('Cancelled')).toBeTruthy();
   });
 
+  it('renders Disputed for status 5', () => {
+    render(<GrantStatusBadge status={5} />);
+    expect(screen.getByText('Disputed')).toBeTruthy();
+    expect(screen.queryByText('Pending')).toBeNull();
+  });
+
   it('falls back to Pending for unknown status', () => {
     render(<GrantStatusBadge status={99} />);
     expect(screen.getByText('Pending')).toBeTruthy();
