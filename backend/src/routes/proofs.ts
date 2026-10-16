@@ -1,8 +1,19 @@
 import { Router } from "express";
 import multer from "multer";
 import { IpfsService } from "../services/ipfs-service";
+import { authMiddleware } from "../middlewares/auth-middleware";
+import { createWalletRateLimiter } from "../middlewares/rate-limiter";
+import type { AuthenticatedRequest } from "../types/auth";
 
 const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50 MB
+
+// 20 uploads per authenticated wallet per hour. Keyed off the session identity,
+// not a client-supplied field, so it cannot be rotated to bypass the limit.
+const uploadRateLimiter = createWalletRateLimiter(
+  60 * 60 * 1000,
+  20,
+  (req) => (req as AuthenticatedRequest).user?.stellarAddress ?? null,
+);
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -33,36 +44,42 @@ export const buildProofsRouter = (ipfsService: IpfsService) => {
    * Uploads a milestone proof document to IPFS and returns the CID.
    * Multipart/form-data: field name "file"
    */
-  router.post("/upload", upload.single("file"), async (req, res, next) => {
-    try {
-      if (!req.file) {
-        res.status(400).json({ error: "No file attached; use multipart field name 'file'" });
-        return;
-      }
+  router.post(
+    "/upload",
+    authMiddleware as any,
+    uploadRateLimiter,
+    upload.single("file"),
+    async (req, res, next) => {
+      try {
+        if (!req.file) {
+          res.status(400).json({ error: "No file attached; use multipart field name 'file'" });
+          return;
+        }
 
-      const result = await ipfsService.uploadFile(
-        req.file.buffer,
-        req.file.originalname,
-        req.file.mimetype,
-      );
+        const result = await ipfsService.uploadFile(
+          req.file.buffer,
+          req.file.originalname,
+          req.file.mimetype,
+        );
 
-      res.status(201).json({
-        data: {
-          cid: result.cid,
-          gatewayUrl: result.gatewayUrl,
-          size: result.size,
-          fileName: req.file.originalname,
-          mimeType: req.file.mimetype,
-        },
-      });
-    } catch (error: unknown) {
-      if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
-        res.status(413).json({ error: "File exceeds 50 MB limit" });
-        return;
+        res.status(201).json({
+          data: {
+            cid: result.cid,
+            gatewayUrl: result.gatewayUrl,
+            size: result.size,
+            fileName: req.file.originalname,
+            mimeType: req.file.mimetype,
+          },
+        });
+      } catch (error: unknown) {
+        if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
+          res.status(413).json({ error: "File exceeds 50 MB limit" });
+          return;
+        }
+        next(error);
       }
-      next(error);
-    }
-  });
+    },
+  );
 
   /**
    * GET /proofs/cid/:cid

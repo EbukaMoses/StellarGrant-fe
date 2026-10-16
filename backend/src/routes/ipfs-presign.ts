@@ -12,16 +12,18 @@ import { createWalletRateLimiter } from "../middlewares/rate-limiter";
 import { ipfsService } from "../services/ipfs-service";
 import type { AuthenticatedRequest } from "../types/auth";
 
-const presignBody = z.object({
-  address: z.string().min(10).max(120),
-});
-
 const verifyBody = z.object({
   cid: z.string().min(10).max(100),
 });
 
-// 10 presign requests per wallet per hour — see issue spec (rate-limit 10/hr)
-const presignRateLimiter = createWalletRateLimiter(60 * 60 * 1000, 10);
+// 10 presign requests per authenticated wallet per hour — see issue spec (rate-limit 10/hr).
+// The key is derived from the authenticated session identity (set by authMiddleware),
+// never from a client-supplied body field, so it cannot be spoofed.
+const presignRateLimiter = createWalletRateLimiter(
+  60 * 60 * 1000,
+  10,
+  (req) => (req as AuthenticatedRequest).user?.stellarAddress ?? null,
+);
 
 export function buildIpfsPresignRouter(): Router {
   const router = Router();
@@ -39,15 +41,15 @@ export function buildIpfsPresignRouter(): Router {
     "/presign",
     authMiddleware as any,
     presignRateLimiter,
-    async (req: any, res: Response) => {
+    async (req: AuthenticatedRequest, res: Response) => {
       try {
-        const body = presignBody.safeParse(req.body);
-        if (!body.success) {
-          res.status(400).json({ error: "address is required" });
+        const address = req.user?.stellarAddress;
+        if (!address) {
+          res.status(401).json({ error: "Authentication required" });
           return;
         }
 
-        const data = await ipfsService.generatePresignedKey(body.data.address);
+        const data = await ipfsService.generatePresignedKey(address);
         res.status(200).json({ data });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);

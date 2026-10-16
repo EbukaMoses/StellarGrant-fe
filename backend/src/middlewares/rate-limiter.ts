@@ -134,5 +134,8 @@ export const walletLimiters = {
   ),
   grantFeedback: createWalletRateLimiter(24 * 60 * 60 * 1000, 1),
   grantDraft: createWalletRateLimiter(60 * 60 * 1000, 20),
-  disputeArgument: createWalletRateLimiter(24 * 60 * 60 * 1000, 3),
+  disputeArgument: createWalletRateLimiter(24 * 60 * 60 * 1000, 3, (req) =>
+    (req as Request & { user?: { stellarAddress?: string } }).user?.stellarAddress ??
+    extractWalletAddress(req)
+  ),
 };
