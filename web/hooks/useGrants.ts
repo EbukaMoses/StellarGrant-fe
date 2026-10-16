@@ -38,6 +38,76 @@ interface UseGrantsResult {
 
 const hookLogger = logger.child("useGrants");
 
+/**
+ * `Grant` stores amounts/timestamps as `bigint`, but JSON cannot — responses
+ * arrive with those fields as numbers or digit strings. Convert them back so
+ * consumers (e.g. `GrantCard`) can do real `bigint` maths and date maths.
+ * Anything that is not an integer (e.g. an ISO date string) is left untouched.
+ */
+function toChainUint(value: unknown): bigint {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number" && Number.isSafeInteger(value)) return BigInt(value);
+  if (typeof value === "string" && /^-?\d+$/.test(value.trim())) return BigInt(value.trim());
+  return 0n;
+}
+
+function reviveGrant(grant: Grant): Grant {
+  return {
+    ...grant,
+    budget: toChainUint(grant.budget),
+    funded: toChainUint(grant.funded),
+    deadline: toChainUint(grant.deadline),
+    created_at: toChainUint(grant.created_at),
+    reviewers: Array.isArray(grant.reviewers) ? grant.reviewers : [],
+  };
+}
+
+/**
+ * Parse a grants-list payload into the canonical `GrantPage`.
+ *
+ * The mock server (`mock-server/routes/grants.ts`) responds with the
+ * `GrantPage` envelope; the legacy `{ data, total, nextPage }` and backend
+ * `{ data, meta }` shapes are accepted too, so a differently-shaped upstream
+ * degrades gracefully instead of throwing on `payload.grants`.
+ */
+export function normalizeGrantPage(payload: unknown): GrantPage {
+  const body = (payload ?? {}) as {
+    grants?: unknown;
+    data?: unknown;
+    total?: unknown;
+    nextPage?: unknown;
+    meta?: unknown;
+  };
+
+  const rawGrants = Array.isArray(body.grants)
+    ? body.grants
+    : Array.isArray(body.data)
+      ? body.data
+      : null;
+
+  if (!rawGrants) {
+    throw new Error("Unexpected grants response: payload has no `grants` array");
+  }
+
+  const meta = (body.meta ?? {}) as { total?: unknown };
+  const total =
+    typeof body.total === "number"
+      ? body.total
+      : typeof meta.total === "number"
+        ? meta.total
+        : rawGrants.length;
+
+  const grants = rawGrants
+    .filter((grant): grant is Grant => Boolean(grant) && typeof grant === "object")
+    .map(reviveGrant);
+
+  return {
+    grants,
+    total,
+    nextPage: typeof body.nextPage === "number" ? body.nextPage : null,
+  };
+}
+
 function buildGrantsUrl(options: UseGrantsOptions, page: number): string {
   const params = new URLSearchParams();
   if (options.status) params.set("status", options.status);
@@ -52,9 +122,12 @@ async function fetchGrantsPage(options: UseGrantsOptions, page: number): Promise
   const url = buildGrantsUrl(options, page);
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch grants: ${res.status}`);
-  const json = (await res.json()) as GrantPage;
-  hookLogger.debug("Grants fetched", { count: json.grants.length, total: json.total });
-  return json;
+  const grantPage = normalizeGrantPage(await res.json());
+  hookLogger.debug("Grants fetched", {
+    count: grantPage.grants.length,
+    total: grantPage.total,
+  });
+  return grantPage;
 }
 
 function classifyError(err: Error): "network" | "api" | "rpc" | "generic" {

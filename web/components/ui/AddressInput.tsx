@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useId, useRef, useState } from "react";
+import { StrKey } from "@stellar/stellar-sdk";
 import { useWalletStore } from "@/lib/store";
 
-const STELLAR_ADDRESS_REGEX = /^G[A-Z2-7]{55}$/;
 const INVALID_MESSAGE = "Invalid Stellar address";
 
 export function addressToColor(addr: string): string {
@@ -12,8 +12,16 @@ export function addressToColor(addr: string): string {
   return `hsl(${Math.abs(hash) % 360}, 70%, 50%)`;
 }
 
+/**
+ * Validate a Stellar public key.
+ *
+ * `StrKey` checks the base32 encoding, the version byte *and* the CRC16
+ * checksum, so a mistyped address that still matches `/^G[A-Z2-7]{55}$/`
+ * is correctly rejected here instead of failing later at transaction
+ * build/sign time (or never, for a reviewer slot that never signs).
+ */
 function isValidStellarAddress(value: string): boolean {
-  return STELLAR_ADDRESS_REGEX.test(value);
+  return StrKey.isValidEd25519PublicKey(value);
 }
 
 function CheckIcon() {
@@ -149,7 +157,9 @@ export function AddressInput({
   const handleUseMyAddress = () => {
     if (!walletAddress) return;
     onChange(walletAddress);
-    applyValid(walletAddress);
+    // Route through the same checksum validation as typed/pasted input —
+    // the green checkmark must never lie.
+    validateValue(walletAddress);
     pastedInvalidRef.current = false;
   };
 

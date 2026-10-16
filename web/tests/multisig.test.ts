@@ -65,7 +65,7 @@ describe("buildUnsignedTransaction", () => {
 
     vi.mocked(getRpcClient).mockReturnValue({
       getAccount: vi.fn().mockResolvedValue(account),
-    } as ReturnType<typeof getRpcClient>);
+    } as unknown as ReturnType<typeof getRpcClient>);
 
     const originalTx = new TransactionBuilder(account, {
       fee: BASE_FEE.toString(),

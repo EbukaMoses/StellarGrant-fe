@@ -5,7 +5,7 @@ import { CreateGrantForm } from "@/components/grants/CreateGrantForm";
 // 1. Mock useWalletStore
 vi.mock("@/lib/store", () => ({
   useWalletStore: vi.fn(<T,>(selector: (s: { address: string }) => T) =>
-    selector({ address: "GBWALLET123456789012345678901234567890123456789012345678" })
+    selector({ address: "GASUAQLFSMVODTPT4GP55RASDBE6ZCN5J76XLO5LRQTNJDNTTNK2NRQK" })
   ),
 }));
 
@@ -103,7 +103,7 @@ describe("CreateGrantForm Multi-Step Flow", () => {
 
     // Fill Recipient Address
     const addressInput = screen.getByLabelText("Recipient Stellar Address");
-    const validAddr = "GBK4TDRSOUF5LMX4PLM6L35R66Z356A2XF435ZDR4235SDR4235SDR42";
+    const validAddr = "GCK4LZF4RXGPTVCQFSAZ5RYS7CY26BSSML5TJLSBVWUNFJDTNGJ2LOWH";
     fireEvent.change(addressInput, { target: { value: validAddr } });
     fireEvent.blur(addressInput);
 
@@ -135,7 +135,7 @@ describe("CreateGrantForm Multi-Step Flow", () => {
       target: { value: "This is a highly detailed proposal to build cross-chain smart contract bridges utilizing Soroban and Ethereum state proofs." },
     });
     fireEvent.change(screen.getByLabelText("Recipient Stellar Address"), {
-      target: { value: "GBK4TDRSOUF5LMX4PLM6L35R66Z356A2XF435ZDR4235SDR4235SDR42" },
+      target: { value: "GCK4LZF4RXGPTVCQFSAZ5RYS7CY26BSSML5TJLSBVWUNFJDTNGJ2LOWH" },
     });
     fireEvent.change(screen.getByLabelText("Total Budget"), { target: { value: 1000 } });
     fireEvent.change(screen.getByLabelText("Submission Expiry Deadline"), {
@@ -195,7 +195,7 @@ describe("CreateGrantForm Multi-Step Flow", () => {
       target: { value: "This is a detailed description of the brand new development project on Soroban." },
     });
     fireEvent.change(screen.getByLabelText("Recipient Stellar Address"), {
-      target: { value: "GBK4TDRSOUF5LMX4PLM6L35R66Z356A2XF435ZDR4235SDR4235SDR42" },
+      target: { value: "GCK4LZF4RXGPTVCQFSAZ5RYS7CY26BSSML5TJLSBVWUNFJDTNGJ2LOWH" },
     });
     fireEvent.change(screen.getByLabelText("Total Budget"), { target: { value: 500 } });
     fireEvent.change(screen.getByLabelText("Submission Expiry Deadline"), { target: { value: "2027-12-31T23:59" } });
@@ -218,11 +218,11 @@ describe("CreateGrantForm Multi-Step Flow", () => {
       expect(screen.getAllByLabelText(/Reviewer #\d Stellar Address/i)).toHaveLength(3);
     });
     const reviewerInputs = screen.getAllByLabelText(/Reviewer #\d Stellar Address/i);
-    const validAddress1 = "GBK4TDRSOUF5LMX4PLM6L35R66Z356A2XF435ZDR4235SDR4235SDR42";
+    const validAddress1 = "GCK4LZF4RXGPTVCQFSAZ5RYS7CY26BSSML5TJLSBVWUNFJDTNGJ2LOWH";
     
     fireEvent.change(reviewerInputs[0], { target: { value: validAddress1 } });
     fireEvent.change(reviewerInputs[1], { target: { value: validAddress1 } }); // Duplicate
-    fireEvent.change(reviewerInputs[2], { target: { value: "GBM4TDRSOUF5LMX4PLM6L35R66Z356A2XF435ZDR4235SDR4235SDR42" } });
+    fireEvent.change(reviewerInputs[2], { target: { value: "GCZLRS6VV4I7XJGM4WBGSFBSZRH2VFKPTW43ONK4PLWPYDLCE7AYTZPU" } });
 
     fireEvent.click(screen.getByRole("button", { name: /continue/i }));
 
@@ -242,7 +242,7 @@ describe("CreateGrantForm Multi-Step Flow", () => {
       target: { value: "This is a detailed description of the brand new development project on Soroban." },
     });
     fireEvent.change(screen.getByLabelText("Recipient Stellar Address"), {
-      target: { value: "GBK4TDRSOUF5LMX4PLM6L35R66Z356A2XF435ZDR4235SDR4235SDR42" },
+      target: { value: "GCK4LZF4RXGPTVCQFSAZ5RYS7CY26BSSML5TJLSBVWUNFJDTNGJ2LOWH" },
     });
     fireEvent.change(screen.getByLabelText("Total Budget"), { target: { value: 500 } });
     fireEvent.change(screen.getByLabelText("Submission Expiry Deadline"), { target: { value: "2027-12-31T23:59" } });
@@ -260,9 +260,9 @@ describe("CreateGrantForm Multi-Step Flow", () => {
       expect(screen.getAllByLabelText(/Reviewer #\d Stellar Address/i)).toHaveLength(3);
     });
     const reviewerInputs = screen.getAllByLabelText(/Reviewer #\d Stellar Address/i);
-    fireEvent.change(reviewerInputs[0], { target: { value: "GBK4TDRSOUF5LMX4PLM6L35R66Z356A2XF435ZDR4235SDR4235SDR42" } });
-    fireEvent.change(reviewerInputs[1], { target: { value: "GBL4TDRSOUF5LMX4PLM6L35R66Z356A2XF435ZDR4235SDR4235SDR42" } });
-    fireEvent.change(reviewerInputs[2], { target: { value: "GBM4TDRSOUF5LMX4PLM6L35R66Z356A2XF435ZDR4235SDR4235SDR42" } });
+    fireEvent.change(reviewerInputs[0], { target: { value: "GCK4LZF4RXGPTVCQFSAZ5RYS7CY26BSSML5TJLSBVWUNFJDTNGJ2LOWH" } });
+    fireEvent.change(reviewerInputs[1], { target: { value: "GBE5F52IVCZSTRFUWYR5IYGYPSNDMSUY77CEFIZAS5HJ24WVGMWUOTMT" } });
+    fireEvent.change(reviewerInputs[2], { target: { value: "GCZLRS6VV4I7XJGM4WBGSFBSZRH2VFKPTW43ONK4PLWPYDLCE7AYTZPU" } });
     fireEvent.click(screen.getByRole("button", { name: /continue/i }));
 
     // Reach Step 4: Summary screen

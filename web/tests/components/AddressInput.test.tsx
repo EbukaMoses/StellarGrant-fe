@@ -2,17 +2,24 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { useState, type ComponentProps } from "react";
 import { Controller, useForm } from "react-hook-form";
+import { StrKey } from "@stellar/stellar-sdk";
 import {
   AddressInput,
   addressToColor,
 } from "@/components/ui/AddressInput";
 
-const VALID_ADDRESS = `G${"A".repeat(55)}`;
-const OTHER_VALID_ADDRESS = `G${"B".repeat(55)}`;
+// Checksum-valid ed25519 public keys (StrKey.isValidEd25519PublicKey).
+const VALID_ADDRESS = "GCK4LZF4RXGPTVCQFSAZ5RYS7CY26BSSML5TJLSBVWUNFJDTNGJ2LOWH";
+const OTHER_VALID_ADDRESS = "GCZLRS6VV4I7XJGM4WBGSFBSZRH2VFKPTW43ONK4PLWPYDLCE7AYTZPU";
+
+// Correct length and alphabet, but the CRC16 checksum does not verify —
+// exactly what the old format-only regex accepted as valid.
+const INVALID_CHECKSUM_ADDRESS = `${VALID_ADDRESS.slice(0, -1)}A`;
 
 vi.mock("@/lib/store", () => ({
+  // Hoisted above the module body, so the wallet address is inlined here.
   useWalletStore: vi.fn((selector: (s: { address: string | null }) => unknown) =>
-    selector({ address: `G${"W".repeat(55)}` }),
+    selector({ address: "GASUAQLFSMVODTPT4GP55RASDBE6ZCN5J76XLO5LRQTNJDNTTNK2NRQK" }),
   ),
 }));
 
@@ -71,6 +78,24 @@ describe("AddressInput", () => {
 
     expect(screen.getByText("Invalid Stellar address")).toBeTruthy();
     expect(input.parentElement?.querySelector(".text-danger")).toBeTruthy();
+  });
+
+  it("rejects a format-valid address with an invalid checksum (#1285)", () => {
+    // Sanity check: this passes the old format-only regex…
+    expect(INVALID_CHECKSUM_ADDRESS).toMatch(/^G[A-Z2-7]{55}$/);
+    // …but has a CRC16 checksum that does not verify.
+    expect(StrKey.isValidEd25519PublicKey(INVALID_CHECKSUM_ADDRESS)).toBe(false);
+    expect(StrKey.isValidEd25519PublicKey(VALID_ADDRESS)).toBe(true);
+
+    render(<ControlledInput />);
+    const input = screen.getByLabelText("Recipient");
+
+    fireEvent.change(input, { target: { value: INVALID_CHECKSUM_ADDRESS } });
+    fireEvent.blur(input);
+
+    expect(screen.getByText("Invalid Stellar address")).toBeTruthy();
+    expect(input.parentElement?.querySelector(".text-danger")).toBeTruthy();
+    expect(input.parentElement?.querySelector(".text-success")).toBeNull();
   });
 
   it('fills the field when "Use my address" is clicked', async () => {
