@@ -8,6 +8,7 @@ import { env } from "../config/env";
 import { notificationService } from "../services/notification-service";
 import { validateParams, validateRequest } from "../middlewares/validation-middleware";
 import { milestoneCommentCreateSchema, idParamSchema } from "../schemas";
+import { sanitizeComment } from "../utils/sanitize";
 
 const isAdmin = (address?: string) => !!address && env.adminAddresses.includes(address);
 
@@ -63,7 +64,7 @@ export const buildMilestoneCommentsRouter = (
 
       const saved = await commentsRepo.save({
         milestoneId: id,
-        content: payload.content,
+        content: sanitizeComment(payload.content),
         authorAddress: payload.authorAddress,
         parentCommentId: payload.parentCommentId ?? null,
       });
