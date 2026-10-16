@@ -72,7 +72,7 @@ function toIso(timestamp: bigint): string {
 function toApiGrantDetail(grant: Grant, milestones: Milestone[]) {
   const submitted = milestones.filter((m) => m.submitted).length;
   const overdue = milestones.filter(
-    (m) => !m.paid && m.deadline !== null && m.deadline * 1000n < BigInt(Date.now()),
+    (m) => !m.paid && m.deadline != null && m.deadline * 1000n < BigInt(Date.now()),
   ).length;
 
   return {
@@ -96,7 +96,7 @@ function toApiGrantDetail(grant: Grant, milestones: Milestone[]) {
       submitted_at: m.submitted_at !== null ? toIso(m.submitted_at) : null,
       approved_at: m.approved_at !== null ? toIso(m.approved_at) : null,
       paid_at: m.paid_at !== null ? toIso(m.paid_at) : null,
-      overdue: !m.paid && m.deadline !== null && m.deadline * 1000n < BigInt(Date.now()),
+      overdue: !m.paid && m.deadline != null && m.deadline * 1000n < BigInt(Date.now()),
       token: m.token,
       amount: m.amount?.toString(),
     })),
@@ -136,7 +136,7 @@ router.get("/", (req, res) => {
 
   if (token && token.toLowerCase() !== "all") {
     const wantedToken = TOKEN_BY_QUERY[token.toLowerCase()] ?? token.toLowerCase();
-    filteredGrants = filteredGrants.filter((g) => g.token.toLowerCase() === wantedToken);
+    filteredGrants = filteredGrants.filter((g) => g.token?.toLowerCase() === wantedToken);
   }
 
   if (q) {
