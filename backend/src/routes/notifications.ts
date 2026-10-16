@@ -2,6 +2,9 @@ import { Router } from "express";
 import { Repository } from "typeorm";
 import { z } from "zod";
 import { Contributor } from "../entities/Contributor";
+import { authMiddleware } from "../middlewares/auth-middleware";
+import type { AuthenticatedRequest } from "../types/auth";
+import type { Request as ExpressRequest } from "express";
 
 const prefsSchema = z.object({
   address: z.string().min(10).max(120),
@@ -16,7 +19,7 @@ export const buildNotificationsRouter = (contributorRepo: Repository<Contributor
    * PUT /notifications/preferences
    * Opt-in or opt-out of email notifications for a given Stellar address.
    */
-  router.put("/preferences", async (req, res, next) => {
+  router.put("/preferences", authMiddleware as any, async (req: any, res, next) => {
     try {
       const parsed = prefsSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -25,6 +28,12 @@ export const buildNotificationsRouter = (contributorRepo: Repository<Contributor
       }
 
       const { address, email, emailNotifications } = parsed.data;
+
+      // Auth: only the address owner can update preferences
+      if (req.user.stellarAddress !== address) {
+        res.status(403).json({ error: "Not authorized to update preferences for this address" });
+        return;
+      }
 
       let contributor = await contributorRepo.findOne({ where: { address } });
       if (!contributor) {
@@ -46,10 +55,18 @@ export const buildNotificationsRouter = (contributorRepo: Repository<Contributor
   /**
    * GET /notifications/preferences/:address
    * Returns the current notification preferences for an address.
+   * Requires authentication and proof of address ownership.
    */
-  router.get("/preferences/:address", async (req, res, next) => {
+  router.get("/preferences/:address", authMiddleware as any, async (req: any, res, next) => {
     try {
       const { address } = req.params;
+
+      // Auth: only the address owner can read preferences
+      if (req.user.stellarAddress !== address) {
+        res.status(403).json({ error: "Not authorized to read preferences for this address" });
+        return;
+      }
+
       const contributor = await contributorRepo.findOne({ where: { address } });
 
       res.json({

@@ -89,7 +89,7 @@ export class ReconciliationService {
 
         const latestLedger = await this.sorobanClient.getLatestLedger();
         const checkpoint = await this.getOrCreateCheckpoint(latestLedger);
-        const fromLedger = checkpoint.lastLedger + 1;
+        const fromLedger = Number(checkpoint.lastLedger) + 1;
         const toLedger = Math.min(latestLedger, fromLedger + MAX_LEDGER_RANGE - 1);
 
         logger.info("ReconciliationService: starting run", { fromLedger, toLedger, latestLedger });
