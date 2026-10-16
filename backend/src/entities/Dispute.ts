@@ -4,9 +4,11 @@ import {
   Entity,
   Index,
   PrimaryGeneratedColumn,
+  Unique,
 } from "typeorm";
 
 @Entity({ name: "disputes" })
+@Unique(["grantId", "milestoneIdx"])
 export class Dispute {
   @PrimaryGeneratedColumn("increment")
   id!: number;

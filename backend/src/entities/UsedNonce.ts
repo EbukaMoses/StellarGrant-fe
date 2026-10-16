@@ -15,6 +15,6 @@ export class UsedNonce {
   usedAt!: Date;
 
   /** Rows may be purged after this time; the nonce window is minutes. */
-  @Column()
+  @Column({ type: "timestamp" })
   expiresAt!: Date;
 }

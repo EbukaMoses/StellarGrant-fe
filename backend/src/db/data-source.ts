@@ -57,6 +57,9 @@ const entities = [
   WebhookSubscription,
 ];
 
+export const shouldSynchronize = (nodeEnv: string = env.nodeEnv) =>
+  nodeEnv !== "production";
+
 export const buildDataSource = (databaseUrl = env.databaseUrl) =>
   new DataSource({
     type: databaseUrl.startsWith("sqljs") ? "sqljs" : "postgres",
@@ -64,5 +67,6 @@ export const buildDataSource = (databaseUrl = env.databaseUrl) =>
       ? { location: databaseUrl.replace("sqljs://", ""), autoSave: false }
       : { url: databaseUrl }),
     entities,
-    synchronize: true,
+    // Never let TypeORM auto-alter a production schema; use migrations there.
+    synchronize: shouldSynchronize(),
   });

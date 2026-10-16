@@ -31,7 +31,7 @@ export class GrantSyncService {
       await this.upsertMilestones(grant, savedGrant);
       await this.updateContributorReputation(savedGrant);
       if (savedGrant.status === "disputed") {
-        await this.ensureDisputeRecord(savedGrant);
+        await this.ensureDisputeRecord(savedGrant, grant);
       }
     }
   }
@@ -102,15 +102,41 @@ export class GrantSyncService {
     }
   }
 
-  private async ensureDisputeRecord(grant: Grant): Promise<void> {
+  private async ensureDisputeRecord(grant: Grant, source?: SorobanGrant): Promise<void> {
+    const milestoneIdx = await this.resolveDisputedMilestoneIdx(grant, source);
     const existing = await this.disputeRepo.findOne({
-      where: { grantId: grant.id, status: "open" },
+      where: { grantId: grant.id, milestoneIdx },
     });
-    if (!existing) {
+    if (existing) return;
+    try {
       await this.disputeRepo.save(
-        this.disputeRepo.create({ grantId: grant.id, milestoneIdx: 0, status: "open" })
+        this.disputeRepo.create({ grantId: grant.id, milestoneIdx, status: "open" })
       );
+    } catch (err) {
+      // Lost a race with another writer; the unique constraint keeps one row.
+      const again = await this.disputeRepo.findOne({
+        where: { grantId: grant.id, milestoneIdx },
+      });
+      if (!again) throw err;
     }
+  }
+
+  /** First milestone of the grant that does not already have a dispute, else the first milestone. */
+  private async resolveDisputedMilestoneIdx(grant: Grant, source?: SorobanGrant): Promise<number> {
+    const indices = (source?.milestones ?? []).map((m) => m.idx).sort((a, b) => a - b);
+    if (indices.length === 0) {
+      const stored = await this.milestoneRepo.find({
+        where: { grantId: grant.id },
+        order: { idx: "ASC" },
+      });
+      indices.push(...stored.map((m) => m.idx));
+    }
+    if (indices.length === 0) return 0;
+    for (const idx of indices) {
+      const taken = await this.disputeRepo.findOne({ where: { grantId: grant.id, milestoneIdx: idx } });
+      if (!taken) return idx;
+    }
+    return indices[0];
   }
 
   private normalizeGrant(grant: SorobanGrant): Partial<Grant> {
