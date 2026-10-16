@@ -71,13 +71,18 @@ function hasStatusCode(
  * Soroban returns messages like: `"Error(Contract, #10)"` or `"contract error 10"`.
  */
 function parseCodeFromMessage(msg: string): number | null {
-  // "Error(Contract, #N)"
-  const angleMatch = /#(\d+)/.exec(msg);
-  if (angleMatch) return parseInt(angleMatch[1], 10);
+  // "Error(Contract, #N)" — anchored so backtrace frames like "#0", "#1"
+  // in multi-line diagnostics are never mistaken for the contract code.
+  const contractMatch = /Error\(\s*Contract\s*,\s*#(\d+)\s*\)/i.exec(msg);
+  if (contractMatch) return parseInt(contractMatch[1], 10);
 
   // "contract error N" or "error code N"
   const plainMatch = /(?:contract\s+error|error\s+code)\s+(\d+)/i.exec(msg);
   if (plainMatch) return parseInt(plainMatch[1], 10);
+
+  // Last resort: any "#N". Only reached when no structured pattern matched.
+  const looseMatch = /#(\d+)/.exec(msg);
+  if (looseMatch) return parseInt(looseMatch[1], 10);
 
   return null;
 }

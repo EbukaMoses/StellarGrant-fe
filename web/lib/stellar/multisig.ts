@@ -20,7 +20,7 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import { rpc as StellarRpc } from "@stellar/stellar-sdk";
-import { getRpcClient, networkPassphraseConfig } from "./client";
+import { getHorizonClient, getRpcClient, networkPassphraseConfig } from "./client";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -40,6 +40,23 @@ export interface SignerEntry {
   signedXdr?: TransactionXdr;
   /** ISO timestamp of when the signature was received */
   signedAt?: string;
+  /** This signer's weight on the account (1 when not weighted) */
+  weight: number;
+}
+
+/** A signer and its weight, as configured on the Stellar account */
+export interface SignerConfig {
+  publicKey: string;
+  weight: number;
+}
+
+/** Which of the account's three thresholds the operation must meet */
+export type ThresholdLevel = "low" | "med" | "high";
+
+/** The account's real signer set and the threshold for one operation level */
+export interface MultiSigConfig {
+  signers: SignerConfig[];
+  requiredWeight: number;
 }
 
 /** Full snapshot of a pending multi-sig transaction's signature collection */
@@ -48,13 +65,17 @@ export interface MultiSigStatus {
   id: string;
   /** The unsigned base transaction XDR to be signed by each party */
   unsignedXdr: TransactionXdr;
-  /** The minimum number of signatures required to meet the account threshold */
+  /** The signature weight required to meet the account threshold */
+  requiredWeight: number;
+  /** @deprecated Equal to `requiredWeight`; kept for backwards compatibility */
   requiredSignatures: number;
   /** All signers and their current status */
   signers: SignerEntry[];
   /** How many signers have provided a valid signature so far */
   collectedCount: number;
-  /** True when enough signatures have been collected to submit */
+  /** Cumulative weight of the signers who have signed */
+  collectedWeight: number;
+  /** True when the collected weight meets the account threshold */
   isReady: boolean;
   /** UTC timestamp when this session was created */
   createdAt: string;
@@ -218,6 +239,32 @@ export async function submitSignedXdr(
   return { txHash, ledger: confirmation.ledger };
 }
 
+/**
+ * Load an account's real signers (with weights) and the threshold for the
+ * given operation level from Horizon. Signers with weight 0 are dropped since
+ * they can never contribute. Soroban `invokeHostFunction` uses "med".
+ */
+export async function fetchMultiSigConfig(
+  accountId: string,
+  level: ThresholdLevel = "med"
+): Promise<MultiSigConfig> {
+  const account = await getHorizonClient().loadAccount(accountId);
+  const thresholds = account.thresholds;
+  const requiredWeight =
+    level === "low"
+      ? thresholds.low_threshold
+      : level === "high"
+        ? thresholds.high_threshold
+        : thresholds.med_threshold;
+
+  return {
+    signers: account.signers
+      .filter((s) => s.weight > 0)
+      .map((s) => ({ publicKey: s.key, weight: s.weight })),
+    requiredWeight,
+  };
+}
+
 // ── MultiSigTracker ───────────────────────────────────────────────────────
 
 /**
@@ -226,11 +273,8 @@ export async function submitSignedXdr(
  *
  * @example
  * ```ts
- * const tracker = new MultiSigTracker({
- *   unsignedXdr,
- *   requiredSignatures: 2,
- *   signerPublicKeys: ["GAAA...", "GBBB...", "GCCC..."],
- * });
+ * const { signers, requiredWeight } = await fetchMultiSigConfig(sourceAddress);
+ * const tracker = new MultiSigTracker({ unsignedXdr, signers, requiredWeight });
  *
  * // When a signer returns their signed XDR:
  * tracker.addSignature("GAAA...", signedXdrFromGAAA);
@@ -247,27 +291,45 @@ export class MultiSigTracker {
 
   constructor(options: {
     unsignedXdr: TransactionXdr;
-    requiredSignatures: number;
-    signerPublicKeys: string[];
     id?: string;
-  }) {
-    const { unsignedXdr, requiredSignatures, signerPublicKeys, id } = options;
+  } & (
+    | { signers: SignerConfig[]; requiredWeight: number }
+    /** Legacy headcount form: every signer has weight 1 */
+    | { requiredSignatures: number; signerPublicKeys: string[] }
+  )) {
+    const { unsignedXdr, id } = options;
 
-    if (requiredSignatures < 1) {
-      throw new Error("requiredSignatures must be at least 1");
+    let signers: SignerConfig[];
+    let requiredWeight: number;
+    if ("signers" in options) {
+      signers = options.signers;
+      requiredWeight = options.requiredWeight;
+    } else {
+      signers = options.signerPublicKeys.map((publicKey) => ({ publicKey, weight: 1 }));
+      requiredWeight = options.requiredSignatures;
     }
-    if (signerPublicKeys.length < requiredSignatures) {
+
+    if (requiredWeight < 1) {
+      throw new Error("requiredWeight must be at least 1");
+    }
+    if (signers.some((s) => !(s.weight > 0))) {
+      throw new Error("Every signer must have a weight greater than 0");
+    }
+    const totalWeight = signers.reduce((sum, s) => sum + s.weight, 0);
+    if (totalWeight < requiredWeight) {
       throw new Error(
-        "signerPublicKeys must contain at least requiredSignatures entries"
+        "Combined signer weight must be at least the required threshold"
       );
     }
 
     this.status = {
       id: id ?? crypto.randomUUID(),
       unsignedXdr,
-      requiredSignatures,
-      signers: signerPublicKeys.map((pk) => ({ publicKey: pk, status: "pending" })),
+      requiredWeight,
+      requiredSignatures: requiredWeight,
+      signers: signers.map((s) => ({ publicKey: s.publicKey, weight: s.weight, status: "pending" })),
       collectedCount: 0,
+      collectedWeight: 0,
       isReady: false,
       createdAt: new Date().toISOString(),
     };
@@ -334,7 +396,7 @@ export class MultiSigTracker {
   buildCombinedXdr(): TransactionXdr {
     if (!this.status.isReady) {
       throw new Error(
-        `Not enough signatures: have ${this.status.collectedCount}, need ${this.status.requiredSignatures}`
+        `Not enough signature weight: have ${this.status.collectedWeight}, need ${this.status.requiredWeight}`
       );
     }
 
@@ -351,9 +413,11 @@ export class MultiSigTracker {
   }
 
   private recompute(): void {
-    const collected = this.status.signers.filter((s) => s.status === "signed").length;
-    this.status.collectedCount = collected;
-    this.status.isReady = collected >= this.status.requiredSignatures;
+    const signed = this.status.signers.filter((s) => s.status === "signed");
+    const collectedWeight = signed.reduce((sum, s) => sum + s.weight, 0);
+    this.status.collectedCount = signed.length;
+    this.status.collectedWeight = collectedWeight;
+    this.status.isReady = collectedWeight >= this.status.requiredWeight;
   }
 
   private notify(): void {
