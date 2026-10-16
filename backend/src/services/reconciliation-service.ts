@@ -35,6 +35,8 @@ export class ReconciliationService {
     private readonly grantRepo: Repository<Grant>;
     private readonly checkpointRepo: Repository<ReconciliationCheckpoint>;
     private timer: ReturnType<typeof setInterval> | null = null;
+    /** In-process lock preventing concurrent runs (#1234). */
+    private isRunning = false;
 
     constructor(
         private readonly dataSource: DataSource,
@@ -84,6 +86,24 @@ export class ReconciliationService {
 
     /** Run one reconciliation pass and return a structured result. */
     async run(): Promise<ReconciliationResult> {
+        // Overlap guard (#1234): skip if a run is already in progress.
+        // Concurrent triggers (interval + manual POST /admin/reconcile) must
+        // not run simultaneously — they can compute the same ledger range and
+        // both insert duplicate Activity rows.
+        if (this.isRunning) {
+            logger.info("ReconciliationService: run already in progress, skipping");
+            return { fromLedger: 0, toLedger: 0, eventsFound: 0, gapsFound: 0, gapsFilled: 0, errors: [], durationMs: 0 };
+        }
+
+        this.isRunning = true;
+        try {
+            return await this.runInner();
+        } finally {
+            this.isRunning = false;
+        }
+    }
+
+    private async runInner(): Promise<ReconciliationResult> {
         const startTime = Date.now();
         const errors: string[] = [];
 

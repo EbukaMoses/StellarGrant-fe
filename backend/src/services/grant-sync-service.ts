@@ -70,36 +70,43 @@ export class GrantSyncService {
   }
 
   private async updateContributorReputation(grant: Grant): Promise<void> {
+    // Only award the bonus for completed grants (#1232).
+    if (grant.status !== "completed") return;
+
     const address = grant.recipient;
-    let contributor = await this.contributorRepo.findOne({ where: { address } });
+    const reputationGain = 100;
 
-    if (!contributor) {
-      contributor = this.contributorRepo.create({
-        address,
-        reputation: 0,
-        totalGrantsCompleted: 0,
+    // Wrap check-then-award in a transaction so concurrent syncs cannot
+    // double-award the same (address, grantId, gain) triple (#1233).
+    await this.dataSource.transaction(async (manager) => {
+      let contributor = await manager.getRepository(Contributor).findOne({ where: { address } });
+
+      if (!contributor) {
+        contributor = manager.getRepository(Contributor).create({
+          address,
+          reputation: 0,
+          totalGrantsCompleted: 0,
+        });
+      }
+
+      // Scope the existence check to (address, grantId, gain) so each
+      // completed grant gets its own bonus (#1232).
+      const existingLog = await manager.getRepository(ReputationLog).findOne({
+        where: { address, grantId: grant.id, gain: reputationGain },
       });
-    }
 
-    // Check if we already logged reputation for this grant
-    const existingLog = await this.reputationLogRepo.findOne({
-      where: { address, gain: 100 },
-      order: { timestamp: "DESC" },
+      if (!existingLog) {
+        contributor.reputation = (contributor.reputation ?? 0) + reputationGain;
+        await manager.getRepository(Contributor).save(contributor);
+
+        await manager.getRepository(ReputationLog).save({
+          address,
+          gain: reputationGain,
+          grantId: grant.id,
+          timestamp: new Date(),
+        });
+      }
     });
-
-    // Only award reputation if it hasn't been logged yet
-    if (!existingLog) {
-      const reputationGain = 100;
-      contributor.reputation = (contributor.reputation ?? 0) + reputationGain;
-      await this.contributorRepo.save(contributor);
-
-      // Log the reputation gain
-      await this.reputationLogRepo.save({
-        address,
-        gain: reputationGain,
-        timestamp: new Date(),
-      });
-    }
   }
 
   private async ensureDisputeRecord(grant: Grant): Promise<void> {

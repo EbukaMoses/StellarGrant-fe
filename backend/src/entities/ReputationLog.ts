@@ -12,6 +12,10 @@ export class ReputationLog {
   @Column({ type: "int" })
   gain!: number;
 
+  @Column({ type: "int", nullable: true })
+  @Index("IDX_reputation_logs_address_grant")
+  grantId!: number | null;
+
   @CreateDateColumn()
   @Index("IDX_reputation_logs_timestamp")
   timestamp!: Date;
