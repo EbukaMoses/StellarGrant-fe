@@ -1,4 +1,4 @@
-import { Repository, DataSource } from "typeorm";
+import { Repository, DataSource, LessThanOrEqual } from "typeorm";
 import { WebhookSubscription, WebhookEventType } from "../entities/WebhookSubscription";
 import { WebhookDeliveryLog, WebhookDeliveryStatus } from "../entities/WebhookDeliveryLog";
 import { createHmac } from "node:crypto";
@@ -225,7 +225,7 @@ export class WebhookDispatcher {
     const pendingRetries = await this.deliveryLogRepo.find({
       where: {
         status: WebhookDeliveryStatus.RETRYING,
-        nextRetryAt: { $lte: new Date().toISOString() } as any,
+        nextRetryAt: LessThanOrEqual(new Date().toISOString()),
       },
       relations: ["subscription"],
       take: 50, // Batch size
