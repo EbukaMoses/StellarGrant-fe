@@ -205,7 +205,8 @@ export const buildGrantRouter = (
       }
 
       // ── Offset-based path (backwards-compatible) — preserves original id ASC order
-      const page = Math.max(Number(rawPage) || 1, 1);
+      const parsedPage = Number(rawPage);
+      const page = Number.isFinite(parsedPage) && parsedPage >= 1 ? Math.floor(parsedPage) : 1;
       const skip = (page - 1) * limit;
 
       const grants = Number.isInteger(communityId)

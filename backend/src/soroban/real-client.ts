@@ -14,7 +14,7 @@ import type {
   SorobanContractEvent,
   SorobanMilestone,
 } from "./types";
-import { decodeU64, decodeString, decodeAddress, decodeVec, decodeMap } from "./decode";
+import { decodeU64, decodeString, decodeAddress, decodeVec, decodeMap, decodeI128AsString } from "./decode";
 
 export class RealSorobanClient implements SorobanContractClient {
   private readonly server: rpc.Server;
@@ -53,19 +53,28 @@ export class RealSorobanClient implements SorobanContractClient {
     fromLedger: number,
     toLedger: number,
   ): Promise<SorobanContractEvent[]> {
-    const response = await this.server.getEvents({
-      startLedger: fromLedger,
-      filters: [
-        {
-          type: "contract",
-          contractIds: [this.contractId],
-        },
-      ],
-    });
+    const allEvents: SorobanContractEvent[] = [];
+    let cursor: string | undefined;
 
-    return response.events
-      .filter((e) => e.ledger <= toLedger)
-      .map((e) => this.decodeEvent(e));
+    // Paginate through all events in the ledger range (#1245)
+    do {
+      const response = await this.server.getEvents({
+        startLedger: fromLedger,
+        endLedger: toLedger,
+        limit: 200,
+        filters: [
+          {
+            type: "contract",
+            contractIds: [this.contractId],
+          },
+        ],
+      });
+
+      allEvents.push(...response.events.map((e) => this.decodeEvent(e)));
+      cursor = response.cursor;
+    } while (cursor);
+
+    return allEvents.filter((e) => e.ledger <= toLedger);
   }
 
   // ── Private helpers ───────────────────────────────────────────────────
@@ -128,7 +137,7 @@ export class RealSorobanClient implements SorobanContractClient {
       ? decodeAddress(m.get("recipient")!)
       : "";
     const totalAmount = m.has("total_amount")
-      ? decodeString(m.get("total_amount")!)
+      ? decodeI128AsString(m.get("total_amount")!)
       : "0";
     const owner = m.has("owner")
       ? decodeAddress(m.get("owner")!)

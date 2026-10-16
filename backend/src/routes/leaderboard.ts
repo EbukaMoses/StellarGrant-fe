@@ -135,7 +135,8 @@ export const buildLeaderboardRouter = (leaderboardService: LeaderboardService) =
       }
 
       // ── Offset-based path (backwards-compatible) ───────────────────────────
-      const page = Math.max(Number(rawPage) || 1, 1);
+      const parsedPage = Number(rawPage);
+      const page = Number.isFinite(parsedPage) && parsedPage >= 1 ? Math.floor(parsedPage) : 1;
       const [data, total] = await leaderboardService.getLeaderboard(period, page, limit);
 
       return res.json({
