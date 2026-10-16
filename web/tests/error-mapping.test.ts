@@ -275,6 +275,36 @@ describe("parseSorobanError", () => {
 
 // ── isContractError ───────────────────────────────────────────────────────────
 
+describe("parseSorobanError — multi-line diagnostics (#1281)", () => {
+  it("ignores backtrace frames that precede the real Error(Contract, #N)", () => {
+    const diagnostic = [
+      "HostError: Error(Contract, #20)",
+      "",
+      "Event log (newest first):",
+      "   0: [Diagnostic Event] contract:CABC, topics:[error, Error(Contract, #20)], data:[\"escalating error to panic\"]",
+      "",
+      "Backtrace (newest first):",
+      "   #1: soroban_env_host::host::Host::err",
+      "   #2: stellar_grants::fund",
+    ].join("\n");
+    const msg = ["Backtrace:", "#10 frame", "#11 frame", diagnostic].join("\n");
+    const err = parseSorobanError(new Error(msg));
+    expect(err).toBeInstanceOf(SorobanContractError);
+    expect((err as SorobanContractError).code).toBe(ErrorCode.InsufficientFunds);
+  });
+
+  it("does not misclassify when an early frame equals a registered code", () => {
+    const msg = "#1 frame at host.rs\n#2 frame\nError(Contract, #10)";
+    const err = parseSorobanError(msg) as SorobanContractError;
+    expect(err.code).toBe(ErrorCode.GrantNotFound);
+  });
+
+  it("falls back to a loose #N when no anchored pattern exists", () => {
+    const err = parseSorobanError("failed with #12") as SorobanContractError;
+    expect(err.code).toBe(ErrorCode.GrantNotActive);
+  });
+});
+
 describe("isContractError", () => {
   it("returns true for a matching SorobanContractError", () => {
     const err = new SorobanContractError(ErrorCode.GrantNotFound);
