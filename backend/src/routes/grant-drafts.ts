@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { RequestHandler, Router } from "express";
 import { Repository, DataSource } from "typeorm";
 import { z } from "zod";
 import { Keypair, StrKey } from "@stellar/stellar-sdk";
@@ -110,6 +110,7 @@ function calculateCompleteness(draftData: Record<string, unknown>): number {
 export const buildGrantDraftsRouter = (
   dataSource: DataSource,
   webhookDispatcher: WebhookDispatcher,
+  signedAuth: RequestHandler,
 ) => {
   const router = Router();
   const grantRepo: Repository<Grant> = dataSource.getRepository(Grant);
@@ -451,9 +452,15 @@ export const buildGrantDraftsRouter = (
   );
 
   // GET /users/:address/drafts - list all drafts for this address
-  router.get("/users/:address/drafts", async (req, res, next) => {
+  router.get("/users/:address/drafts", signedAuth, async (req: any, res, next) => {
     try {
       const { address } = req.params;
+
+      // Callers may only list drafts for an address they proved they control (#1206).
+      if (req.user?.stellarAddress !== address) {
+        res.status(403).json({ error: "Access denied" });
+        return;
+      }
 
       if (!StrKey.isValidEd25519PublicKey(address)) {
         res.status(400).json({ error: "Invalid Stellar address" });
