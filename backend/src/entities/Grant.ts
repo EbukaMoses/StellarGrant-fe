@@ -1,4 +1,4 @@
-import { Column, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryColumn, UpdateDateColumn, ManyToMany, JoinTable } from "typeorm";
+import { Column, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn, ManyToMany, JoinTable } from "typeorm";
 import { MilestoneProof } from "./MilestoneProof";
 import { Milestone } from "./Milestone";
 import { Community } from "./Community";
@@ -6,7 +6,7 @@ import { GrantReviewer } from "./GrantReviewer";
 
 @Entity({ name: "grants" })
 export class Grant {
-  @PrimaryColumn({ type: "int" })
+  @PrimaryGeneratedColumn("increment")
   id!: number;
 
   @Column({ type: "varchar", length: 200 })
@@ -18,8 +18,8 @@ export class Grant {
   @Column({ type: "varchar", length: 30 })
   status!: string;
 
-  @Column({ type: "varchar", length: 120, nullable: true })
-  owner?: string | null;
+  @Column({ type: "varchar", length: 120 })
+  owner!: string;
 
   @Column({ type: "varchar", length: 120 })
   recipient!: string;
