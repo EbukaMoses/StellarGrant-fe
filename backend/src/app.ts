@@ -19,6 +19,7 @@ import { buildCommunitiesRouter } from "./routes/communities";
 import { buildNotificationsRouter } from "./routes/notifications";
 import { buildAdminRouter } from "./routes/admin";
 import { buildAdminMiddleware } from "./middlewares/admin-middleware";
+import { buildSignedUserAuth } from "./middlewares/signed-user-auth";
 import { GrantSyncService } from "./services/grant-sync-service";
 import { SignatureService } from "./services/signature-service";
 import { LeaderboardService } from "./services/leaderboard-service";
@@ -81,7 +82,9 @@ export const createApp = (dataSource: DataSource, sorobanClient: SorobanContract
   const leaderboardService = new LeaderboardService(dataSource);
   const responseCacheService = new ResponseCacheService();
   const rbacService = new RbacService(userRepo, roleRepo, userRoleRepo);
-  const adminMiddleware = buildAdminMiddleware(signatureService);
+  const signedUserAuth = buildSignedUserAuth(signatureService, nonceService);
+  const optionalSignedUserAuth = buildSignedUserAuth(signatureService, nonceService, { optional: true });
+  const adminMiddleware = buildAdminMiddleware(signatureService, nonceService);
   const reconciliationService = new ReconciliationService(dataSource, sorobanClient, grantSyncService);
   const webhookDispatcher = new WebhookDispatcher(dataSource);
 
@@ -99,13 +102,13 @@ export const createApp = (dataSource: DataSource, sorobanClient: SorobanContract
       nonceService,
     ),
   );
-  app.use("/grants", buildGrantDraftsRouter(dataSource, webhookDispatcher));
+  app.use("/grants", buildGrantDraftsRouter(dataSource, webhookDispatcher, signedUserAuth));
   app.use("/milestone_proof", buildMilestoneProofRouter(proofRepo, signatureService, grantRepo, userRepo, nonceService));
   app.use("/search", buildSearchRouter(dataSource));
   app.use("/leaderboard", buildLeaderboardRouter(leaderboardService));
   app.use("/profiles", buildProfilesRouter(contributorRepo, grantRepo));
-  app.use("/my-donations", buildMyDonationsRouter(dataSource));
-  app.use("/communities", buildCommunitiesRouter(communityRepo, grantRepo, activityRepo, rbacService, webhookDispatcher));
+  app.use("/my-donations", buildMyDonationsRouter(dataSource, signedUserAuth));
+  app.use("/communities", optionalSignedUserAuth, buildCommunitiesRouter(communityRepo, grantRepo, activityRepo, rbacService, webhookDispatcher));
   app.use("/notifications", buildNotificationsRouter(contributorRepo));
   app.use("/contributors", buildContributorsRouter(contributorRepo, grantRepo, proofRepo, activityRepo));
   app.use("/ipfs", buildIpfsPresignRouter());

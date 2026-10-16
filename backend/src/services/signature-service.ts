@@ -38,7 +38,37 @@ export type AddReviewerIntent = {
   signature: string;
 };
 
+/** Signed proof that a caller controls `address`, scoped to one method+path. */
+export type UserIntent = {
+  address: string;
+  nonce: string;
+  timestamp: number;
+  action: string;
+  signature: string;
+};
+
 export class SignatureService {
+  buildUserIntentMessage(payload: Omit<UserIntent, "signature">): string {
+    return [
+      "stellargrant:user:v1",
+      payload.address,
+      payload.nonce,
+      payload.timestamp,
+      payload.action,
+    ].join("|");
+  }
+
+  verifyUser(payload: UserIntent): boolean {
+    if (!StrKey.isValidEd25519PublicKey(payload.address)) {
+      return false;
+    }
+    const keypair = Keypair.fromPublicKey(payload.address);
+    return keypair.verify(
+      Buffer.from(this.buildUserIntentMessage(payload), "utf8"),
+      Buffer.from(payload.signature, "base64"),
+    );
+  }
+
   buildIntentMessage(payload: Omit<MilestoneProofIntent, "signature">): string {
     return [
       "stellargrant:milestone_proof:v1",
