@@ -1,10 +1,23 @@
-import { Column, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn, ManyToMany, JoinTable } from "typeorm";
+import {
+  Column,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+  ManyToMany,
+  JoinTable,
+} from "typeorm";
 import { MilestoneProof } from "./MilestoneProof";
 import { Milestone } from "./Milestone";
 import { Community } from "./Community";
 import { GrantReviewer } from "./GrantReviewer";
 
 @Entity({ name: "grants" })
+@Index("IDX_grant_community_id", ["communityId"])
+@Index("IDX_grant_updated_at_id", ["updatedAt", "id"])
 export class Grant {
   @PrimaryGeneratedColumn("increment")
   id!: number;
@@ -27,7 +40,9 @@ export class Grant {
   @Column({ type: "int", nullable: true })
   communityId?: number | null;
 
-  @ManyToOne(() => Community, (community) => community.grants, { nullable: true })
+  @ManyToOne(() => Community, (community) => community.grants, {
+    nullable: true,
+  })
   @JoinColumn({ name: "communityId" })
   community?: Community;
 

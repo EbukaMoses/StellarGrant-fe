@@ -30,6 +30,7 @@ import { env } from "./config/env";
 import { ReconciliationService } from "./services/reconciliation-service";
 import { SorobanContractClient } from "./soroban/types";
 import { AppError } from "./utils/errors";
+import { errorHandler } from "./middlewares/error-handler";
 
 import { User } from "./entities/User";
 import { Role } from "./entities/Role";
@@ -56,6 +57,17 @@ import { buildGrantDraftsRouter } from "./routes/grant-drafts";
 import { buildContributorsRouter } from "./routes/contributors";
 import { buildIpfsPresignRouter } from "./routes/ipfs-presign";
 import { buildEventsRouter } from "./routes/events";
+import { buildRolesRouter } from "./routes/roles";
+import { buildAnalyticsRouter } from "./routes/analytics";
+import { buildActivityRouter } from "./routes/activity";
+import { buildDashboardRouter } from "./routes/dashboard";
+import { buildProfileRouter } from "./routes/profile";
+import { buildProofsRouter } from "./routes/proofs";
+import { buildStatsRouter } from "./routes/stats";
+import { buildWatchlistRouter } from "./routes/watchlist";
+import { GrantView } from "./entities/GrantView";
+import { UserWatchlist } from "./entities/UserWatchlist";
+import { IpfsService } from "./services/ipfs-service";
 
 export const createApp = (
   dataSource: DataSource,
@@ -81,6 +93,8 @@ export const createApp = (
   const milestoneRepo = dataSource.getRepository(Milestone);
   const commentsRepo = dataSource.getRepository(MilestoneComment);
   const feedbackRepo = dataSource.getRepository(GrantFeedback);
+  const grantViewRepo = dataSource.getRepository(GrantView);
+  const watchlistRepo = dataSource.getRepository(UserWatchlist);
 
   const grantSyncService = new GrantSyncService(dataSource, sorobanClient);
   const signatureService = new SignatureService();
@@ -157,6 +171,16 @@ export const createApp = (
   );
   app.use("/ipfs", buildIpfsPresignRouter());
   app.use("/events", buildEventsRouter(activityRepo));
+  app.use(
+    "/webhooks",
+    buildWebhooksRouter(
+      userRepo,
+      webhookSubscriptionRepo,
+      webhookDispatcher,
+      rbacService,
+      signedUserAuth,
+    ),
+  );
   app.use("/users", buildUserRouter(userRepo));
   app.use(
     "/grant_reviewers",
