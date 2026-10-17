@@ -3,20 +3,26 @@ import { In, Repository } from "typeorm";
 import { Grant } from "../entities/Grant";
 import { Milestone } from "../entities/Milestone";
 import { MilestoneProof } from "../entities/MilestoneProof";
-import { GrantSyncService } from "../services/grant-sync-service";
 import { createProofLookup, enrichMilestone } from "../utils/milestones";
 
+/**
+ * Dashboard route — reads already-synced data from the database.
+ *
+ * The previous implementation called syncService.syncAllGrants() on every
+ * request, turning each GET into a full on-chain resync.  That is a DoS
+ * amplification vector: a single unauthenticated request triggers N Soroban
+ * RPC calls.  Sync now runs only on its own scheduled interval or via the
+ * admin-triggered endpoint; the dashboard simply reads what is already stored.
+ */
 export const buildDashboardRouter = (
   grantRepo: Repository<Grant>,
   milestoneRepo: Repository<Milestone>,
   proofRepo: Repository<MilestoneProof>,
-  syncService: GrantSyncService,
 ) => {
   const router = Router();
 
   router.get("/:address", async (req, res, next) => {
     try {
-      await syncService.syncAllGrants();
       const address = String(req.params.address || "").trim();
       if (!address) {
         res.status(400).json({ error: "Address is required" });
@@ -57,16 +63,25 @@ export const buildDashboardRouter = (
       const proofLookup = createProofLookup(proofs);
       const grantMap = new Map(grants.map((grant) => [grant.id, grant]));
       const enriched = milestones.map((milestone) => {
-        const base = enrichMilestone(milestone, proofLookup.get(`${milestone.grantId}:${milestone.idx}`));
+        const base = enrichMilestone(
+          milestone,
+          proofLookup.get(`${milestone.grantId}:${milestone.idx}`),
+        );
         return {
           ...base,
-          grantTitle: grantMap.get(milestone.grantId)?.title ?? `Grant #${milestone.grantId}`,
+          grantTitle:
+            grantMap.get(milestone.grantId)?.title ??
+            `Grant #${milestone.grantId}`,
           grantStatus: grantMap.get(milestone.grantId)?.status ?? "unknown",
         };
       });
 
-      const upcomingDeadlines = enriched.filter((milestone) => !milestone.submitted && !milestone.overdue);
-      const overdueMilestones = enriched.filter((milestone) => milestone.overdue);
+      const upcomingDeadlines = enriched.filter(
+        (milestone) => !milestone.submitted && !milestone.overdue,
+      );
+      const overdueMilestones = enriched.filter(
+        (milestone) => milestone.overdue,
+      );
 
       res.json({
         data: {

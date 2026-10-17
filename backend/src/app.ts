@@ -202,12 +202,7 @@ export const createApp = (
   );
   app.use(
     "/disputes",
-    buildDisputesRouter(
-      dataSource,
-      rbacService,
-      webhookDispatcher,
-      signatureService,
-    ),
+    buildDisputesRouter(dataSource, rbacService, webhookDispatcher),
   );
   app.use("/", buildGrantDisputesRouter(dataSource));
   app.use(
@@ -220,43 +215,13 @@ export const createApp = (
   );
   app.use(
     "/",
-    buildMilestoneCommentsRouter(milestoneRepo, commentsRepo, reviewerRepo),
+    buildMilestoneCommentsRouter(
+      milestoneRepo,
+      commentsRepo,
+      reviewerRepo,
+      adminMiddleware,
+    ),
   );
-
-  // Roles: public reads, write endpoints protected by signedUserAuth + RBAC
-  app.use(
-    "/roles",
-    signedUserAuth,
-    buildRolesRouter(userRepo, roleRepo, userRoleRepo, rbacService),
-  );
-
-  // Analytics: view tracking (public) and analytics reads (restricted to grant owner/admin)
-  app.use("/analytics", buildAnalyticsRouter(grantRepo, grantViewRepo));
-
-  // Activity feed: cursor-paginated, public
-  app.use("/activity", buildActivityRouter(activityRepo, contributorRepo));
-
-  // Dashboard: milestone deadline summary for a given address, public
-  app.use(
-    "/dashboard",
-    buildDashboardRouter(grantRepo, milestoneRepo, proofRepo, grantSyncService),
-  );
-
-  // Profile: OAuth-linked social verification status for a Stellar address, public
-  app.use("/profile", buildProfileRouter(userRepo));
-
-  // Proofs: IPFS file upload (auth required) and CID redirect (public)
-  app.use("/proofs", buildProofsRouter(new IpfsService()));
-
-  // Stats: platform-wide aggregates, cached, public
-  app.use(
-    "/stats",
-    buildStatsRouter(grantRepo, proofRepo, responseCacheService),
-  );
-
-  // Watchlist: per-address grant watchlist, auth via x-user-address header
-  app.use("/watchlist", buildWatchlistRouter(watchlistRepo, grantRepo));
-
   app.get("/metrics", async (req, res, next) => {
     try {
       if (
