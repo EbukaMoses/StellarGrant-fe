@@ -5,10 +5,13 @@ import { Grant } from "../entities/Grant";
 import { Milestone } from "../entities/Milestone";
 import { Activity } from "../entities/Activity";
 import { RbacService } from "../services/rbac-service";
+import { SignatureService } from "../services/signature-service";
 import { WebhookDispatcher } from "../services/webhook-dispatcher";
 import { walletLimiters } from "../middlewares/rate-limiter";
 import { authMiddleware } from "../middlewares/auth-middleware";
 import type { AuthenticatedRequest } from "../types/auth";
+
+const MAX_SKEW_MS = 5 * 60 * 1000;
 
 const isUniqueViolation = (err: unknown): boolean => {
   const e = err as { code?: string; message?: string } | undefined;
@@ -22,8 +25,10 @@ const isUniqueViolation = (err: unknown): boolean => {
 interface ResolveBody {
   approve_payout: boolean;
   tx_hash?: string;
-  resolver_address?: string;
-  signature?: string;
+  resolver_address: string;
+  nonce: string;
+  timestamp: number;
+  signature: string;
 }
 
 interface ArgumentBody {
@@ -35,12 +40,14 @@ interface ArgumentBody {
 export const buildDisputesRouter = (
   dataSource: DataSource,
   rbacService: RbacService,
-  webhookDispatcher: WebhookDispatcher
+  webhookDispatcher: WebhookDispatcher,
+  signatureService: SignatureService,
 ) => {
   const router = Router();
   const disputeRepo: Repository<Dispute> = dataSource.getRepository(Dispute);
   const grantRepo: Repository<Grant> = dataSource.getRepository(Grant);
-  const milestoneRepo: Repository<Milestone> = dataSource.getRepository(Milestone);
+  const milestoneRepo: Repository<Milestone> =
+    dataSource.getRepository(Milestone);
   const activityRepo: Repository<Activity> = dataSource.getRepository(Activity);
 
   // GET /disputes — list open disputes (?status=all for all)
@@ -51,7 +58,11 @@ export const buildDisputesRouter = (
       const qb = disputeRepo
         .createQueryBuilder("d")
         .leftJoin(Grant, "g", "g.id = d.grantId")
-        .leftJoin(Milestone, "m", "m.grantId = d.grantId AND m.idx = d.milestoneIdx")
+        .leftJoin(
+          Milestone,
+          "m",
+          "m.grantId = d.grantId AND m.idx = d.milestoneIdx",
+        )
         .select([
           "d.id AS id",
           "d.grantId AS grantId",
@@ -102,7 +113,6 @@ export const buildDisputesRouter = (
     }
   });
 
-
   // POST /disputes/:id/argument — submit contributor or funder argument
   router.post(
     "/:id/argument",
@@ -129,7 +139,9 @@ export const buildDisputesRouter = (
         }
         // Reject attempts to act on behalf of another wallet.
         if (body.address && body.address !== address) {
-          res.status(403).json({ error: "Address does not match authenticated wallet" });
+          res
+            .status(403)
+            .json({ error: "Address does not match authenticated wallet" });
           return;
         }
 
@@ -140,11 +152,15 @@ export const buildDisputesRouter = (
         }
 
         if (dispute.status !== "open") {
-          res.status(400).json({ error: "Cannot add argument to a resolved dispute" });
+          res
+            .status(400)
+            .json({ error: "Cannot add argument to a resolved dispute" });
           return;
         }
 
-        const grant = await grantRepo.findOne({ where: { id: dispute.grantId } });
+        const grant = await grantRepo.findOne({
+          where: { id: dispute.grantId },
+        });
         if (!grant) {
           res.status(404).json({ error: "Grant not found" });
           return;
@@ -153,11 +169,15 @@ export const buildDisputesRouter = (
         // The authenticated wallet must actually hold the role it claims.
         if (body.role === "contributor") {
           if (address !== grant.recipient) {
-            res.status(403).json({ error: "Wallet is not the grant recipient" });
+            res
+              .status(403)
+              .json({ error: "Wallet is not the grant recipient" });
             return;
           }
           if (dispute.contributorArgument) {
-            res.status(409).json({ error: "Contributor argument already submitted" });
+            res
+              .status(409)
+              .json({ error: "Contributor argument already submitted" });
             return;
           }
           dispute.contributorArgument = body.argument;
@@ -171,16 +191,22 @@ export const buildDisputesRouter = (
             },
           });
           if (address !== grant.owner && !funded) {
-            res.status(403).json({ error: "Wallet is not a funder of this grant" });
+            res
+              .status(403)
+              .json({ error: "Wallet is not a funder of this grant" });
             return;
           }
           if (dispute.funderArgument) {
-            res.status(409).json({ error: "Funder argument already submitted" });
+            res
+              .status(409)
+              .json({ error: "Funder argument already submitted" });
             return;
           }
           dispute.funderArgument = body.argument;
         } else {
-          res.status(400).json({ error: "role must be 'contributor' or 'funder'" });
+          res
+            .status(400)
+            .json({ error: "role must be 'contributor' or 'funder'" });
           return;
         }
 
@@ -192,28 +218,25 @@ export const buildDisputesRouter = (
     },
   );
 
-  // POST /disputes/:id/resolve — record resolution (council-only via RBAC)
+  // POST /disputes/:id/resolve — record resolution (council-only via RBAC + signed intent)
   router.post("/:id/resolve", async (req, res, next) => {
     try {
-      const stellarAddress =
-        (req.body as { resolver_address?: string }).resolver_address ??
-        req.header("x-user-address");
+      const body = req.body as ResolveBody;
+      const { resolver_address, nonce, timestamp, signature } = body;
 
-      if (!stellarAddress) {
-        res.status(401).json({ error: "Authentication required" });
+      // All signature fields are required — no trust-on-header shortcut
+      if (!resolver_address || !nonce || !timestamp || !signature) {
+        res.status(401).json({
+          error: "Authentication required",
+          message:
+            "resolver_address, nonce, timestamp, and signature are required",
+        });
         return;
       }
 
-      const isCouncil = await rbacService.userHasPermissionByAddress(
-        stellarAddress,
-        "admin:all"
-      );
-
-      if (!isCouncil) {
-        res.status(403).json({
-          error: "Forbidden",
-          message: "Council member access required",
-        });
+      // Timestamp skew check (±5 minutes)
+      if (Math.abs(Date.now() - timestamp) > MAX_SKEW_MS) {
+        res.status(401).json({ error: "Expired intent timestamp" });
         return;
       }
 
@@ -223,9 +246,37 @@ export const buildDisputesRouter = (
         return;
       }
 
-      const body = req.body as ResolveBody;
       if (body.approve_payout === undefined) {
         res.status(400).json({ error: "approve_payout is required" });
+        return;
+      }
+
+      // Verify Ed25519 signature over the dispute resolve intent before any RBAC check
+      const validSig = signatureService.verifyDisputeResolve({
+        disputeId: id,
+        approvePayout: body.approve_payout,
+        resolverAddress: resolver_address,
+        nonce,
+        timestamp,
+        signature,
+      });
+
+      if (!validSig) {
+        res.status(401).json({ error: "Invalid signature" });
+        return;
+      }
+
+      // RBAC check: only council members (admin:all) may resolve disputes
+      const isCouncil = await rbacService.userHasPermissionByAddress(
+        resolver_address,
+        "admin:all",
+      );
+
+      if (!isCouncil) {
+        res.status(403).json({
+          error: "Forbidden",
+          message: "Council member access required",
+        });
         return;
       }
 
@@ -240,8 +291,10 @@ export const buildDisputesRouter = (
         return;
       }
 
-      dispute.status = body.approve_payout ? "resolved_payout" : "resolved_refund";
-      dispute.resolvedBy = stellarAddress;
+      dispute.status = body.approve_payout
+        ? "resolved_payout"
+        : "resolved_refund";
+      dispute.resolvedBy = resolver_address;
       dispute.resolutionTxHash = body.tx_hash ?? null;
       dispute.resolvedAt = new Date();
 
@@ -263,7 +316,9 @@ export const buildDisputesRouter = (
           resolvedBy: saved.resolvedBy,
           txHash: saved.resolutionTxHash,
           grant: grant ? { id: grant.id, title: grant.title } : null,
-          milestone: milestone ? { idx: milestone.idx, title: milestone.title } : null,
+          milestone: milestone
+            ? { idx: milestone.idx, title: milestone.title }
+            : null,
         })
         .catch(() => {
           // webhook failures must never break the response
@@ -303,7 +358,9 @@ export const buildGrantDisputesRouter = (dataSource: DataSource) => {
         });
 
         if (!dispute) {
-          res.status(404).json({ error: "Dispute not found for this milestone" });
+          res
+            .status(404)
+            .json({ error: "Dispute not found for this milestone" });
           return;
         }
 
@@ -311,7 +368,7 @@ export const buildGrantDisputesRouter = (dataSource: DataSource) => {
       } catch (err) {
         next(err);
       }
-    }
+    },
   );
 
   router.post(
@@ -360,7 +417,7 @@ export const buildGrantDisputesRouter = (dataSource: DataSource) => {
         }
         next(err);
       }
-    }
+    },
   );
 
   return router;

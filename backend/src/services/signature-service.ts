@@ -47,6 +47,16 @@ export type UserIntent = {
   signature: string;
 };
 
+/** Signed intent for a council member to resolve a dispute. */
+export type DisputeResolveIntent = {
+  disputeId: number;
+  approvePayout: boolean;
+  resolverAddress: string;
+  nonce: string;
+  timestamp: number;
+  signature: string;
+};
+
 export class SignatureService {
   buildUserIntentMessage(payload: Omit<UserIntent, "signature">): string {
     return [
@@ -91,7 +101,9 @@ export class SignatureService {
     ].join("|");
   }
 
-  buildFeedbackIntentMessage(payload: Omit<FeedbackIntent, "signature">): string {
+  buildFeedbackIntentMessage(
+    payload: Omit<FeedbackIntent, "signature">,
+  ): string {
     return [
       "stellargrant:feedback:v1",
       payload.grantId,
@@ -103,7 +115,9 @@ export class SignatureService {
     ].join("|");
   }
 
-  buildAddReviewerIntentMessage(payload: Omit<AddReviewerIntent, "signature">): string {
+  buildAddReviewerIntentMessage(
+    payload: Omit<AddReviewerIntent, "signature">,
+  ): string {
     return [
       "stellargrant:add_reviewer:v1",
       payload.grantId,
@@ -162,6 +176,31 @@ export class SignatureService {
     const keypair = Keypair.fromPublicKey(payload.address);
     const message = this.buildAdminIntentMessage(payload);
 
+    return keypair.verify(
+      Buffer.from(message, "utf8"),
+      Buffer.from(payload.signature, "base64"),
+    );
+  }
+
+  buildDisputeResolveIntentMessage(
+    payload: Omit<DisputeResolveIntent, "signature">,
+  ): string {
+    return [
+      "stellargrant:dispute_resolve:v1",
+      payload.disputeId,
+      payload.approvePayout.toString(),
+      payload.resolverAddress,
+      payload.nonce,
+      payload.timestamp,
+    ].join("|");
+  }
+
+  verifyDisputeResolve(payload: DisputeResolveIntent): boolean {
+    if (!StrKey.isValidEd25519PublicKey(payload.resolverAddress)) {
+      return false;
+    }
+    const keypair = Keypair.fromPublicKey(payload.resolverAddress);
+    const message = this.buildDisputeResolveIntentMessage(payload);
     return keypair.verify(
       Buffer.from(message, "utf8"),
       Buffer.from(payload.signature, "base64"),

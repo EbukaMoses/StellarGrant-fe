@@ -57,8 +57,17 @@ import { buildGrantDraftsRouter } from "./routes/grant-drafts";
 import { buildContributorsRouter } from "./routes/contributors";
 import { buildIpfsPresignRouter } from "./routes/ipfs-presign";
 import { buildEventsRouter } from "./routes/events";
-import { buildWebhooksRouter } from "./routes/webhooks";
-import { WebhookSubscription } from "./entities/WebhookSubscription";
+import { buildRolesRouter } from "./routes/roles";
+import { buildAnalyticsRouter } from "./routes/analytics";
+import { buildActivityRouter } from "./routes/activity";
+import { buildDashboardRouter } from "./routes/dashboard";
+import { buildProfileRouter } from "./routes/profile";
+import { buildProofsRouter } from "./routes/proofs";
+import { buildStatsRouter } from "./routes/stats";
+import { buildWatchlistRouter } from "./routes/watchlist";
+import { GrantView } from "./entities/GrantView";
+import { UserWatchlist } from "./entities/UserWatchlist";
+import { IpfsService } from "./services/ipfs-service";
 
 export const createApp = (
   dataSource: DataSource,
@@ -84,7 +93,8 @@ export const createApp = (
   const milestoneRepo = dataSource.getRepository(Milestone);
   const commentsRepo = dataSource.getRepository(MilestoneComment);
   const feedbackRepo = dataSource.getRepository(GrantFeedback);
-  const webhookSubscriptionRepo = dataSource.getRepository(WebhookSubscription);
+  const grantViewRepo = dataSource.getRepository(GrantView);
+  const watchlistRepo = dataSource.getRepository(UserWatchlist);
 
   const grantSyncService = new GrantSyncService(dataSource, sorobanClient);
   const signatureService = new SignatureService();
@@ -192,7 +202,12 @@ export const createApp = (
   );
   app.use(
     "/disputes",
-    buildDisputesRouter(dataSource, rbacService, webhookDispatcher),
+    buildDisputesRouter(
+      dataSource,
+      rbacService,
+      webhookDispatcher,
+      signatureService,
+    ),
   );
   app.use("/", buildGrantDisputesRouter(dataSource));
   app.use(
@@ -207,6 +222,41 @@ export const createApp = (
     "/",
     buildMilestoneCommentsRouter(milestoneRepo, commentsRepo, reviewerRepo),
   );
+
+  // Roles: public reads, write endpoints protected by signedUserAuth + RBAC
+  app.use(
+    "/roles",
+    signedUserAuth,
+    buildRolesRouter(userRepo, roleRepo, userRoleRepo, rbacService),
+  );
+
+  // Analytics: view tracking (public) and analytics reads (restricted to grant owner/admin)
+  app.use("/analytics", buildAnalyticsRouter(grantRepo, grantViewRepo));
+
+  // Activity feed: cursor-paginated, public
+  app.use("/activity", buildActivityRouter(activityRepo, contributorRepo));
+
+  // Dashboard: milestone deadline summary for a given address, public
+  app.use(
+    "/dashboard",
+    buildDashboardRouter(grantRepo, milestoneRepo, proofRepo, grantSyncService),
+  );
+
+  // Profile: OAuth-linked social verification status for a Stellar address, public
+  app.use("/profile", buildProfileRouter(userRepo));
+
+  // Proofs: IPFS file upload (auth required) and CID redirect (public)
+  app.use("/proofs", buildProofsRouter(new IpfsService()));
+
+  // Stats: platform-wide aggregates, cached, public
+  app.use(
+    "/stats",
+    buildStatsRouter(grantRepo, proofRepo, responseCacheService),
+  );
+
+  // Watchlist: per-address grant watchlist, auth via x-user-address header
+  app.use("/watchlist", buildWatchlistRouter(watchlistRepo, grantRepo));
+
   app.get("/metrics", async (req, res, next) => {
     try {
       if (
@@ -257,7 +307,22 @@ export const createApp = (
     ),
   );
 
-  app.use(errorHandler);
+  app.use(
+    (
+      err: unknown,
+      _req: express.Request,
+      res: express.Response,
+      _next: express.NextFunction,
+    ) => {
+      if (err instanceof AppError) {
+        res.status(err.statusCode).json(err.toJSON());
+        return;
+      }
+      const message =
+        err instanceof Error ? err.message : "Internal server error";
+      res.status(500).json({ error: message });
+    },
+  );
 
   return app;
 };
