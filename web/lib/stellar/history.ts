@@ -17,6 +17,7 @@
  */
 
 import { getHorizonClient } from "./client";
+import { xdr } from "@stellar/stellar-sdk";
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -113,6 +114,43 @@ function getContractId(): string {
 }
 
 /**
+ * Extract the Soroban contract function name from a transaction's envelope XDR.
+ * Returns undefined if not a Soroban invoke-host-function call to the known contract.
+ */
+function extractFunctionName(envelopeXdr?: string): string | undefined {
+  if (!envelopeXdr) return undefined;
+  try {
+    const env = xdr.TransactionEnvelope.fromXDR(Buffer.from(envelopeXdr, "base64"));
+    // Support both V0 and V1 envelopes
+    const tx = env.switch().value().tx();
+    const ops = tx.operations();
+    const contractId = getContractId();
+    if (!contractId) return undefined;
+    for (let i = 0; i < ops.length; i++) {
+      const op = ops[i];
+      const body = op.body();
+      // The operation type enum name for invokeHostFunction is "invokeHostFunction"
+      if (body.switch().name === "invokeHostFunction") {
+        const invoke = body.invokeHostFunction();
+        // Compare contract IDs (hex string without 0x prefix)
+        const opContractId = invoke.contractId().toString("hex");
+        if (opContractId !== contractId) continue;
+        const fn = invoke.function();
+        if (fn) {
+          // fn is of type ScSymbol (Soroban); get its string representation
+          // ScSymbol is an XDR type with a .symbol() accessor returning the raw bytes.
+          // Use toString() to get UTF‑8 string.
+          return fn.toString();
+        }
+      }
+    }
+  } catch (_) {
+    // Silently ignore parsing errors – fallback to undefined.
+  }
+  return undefined;
+}
+
+/**
  * Given a raw Horizon transaction record, determine the operation type and
  * grant ID by inspecting the memo and optional function name.
  *
@@ -193,7 +231,10 @@ async function fetchAndFilter(
 
   const records: GrantHistoryRecord[] = rawRecords
     .slice(0, limit)
-    .map((tx) => toHistoryRecord(tx, undefined));
+    .map((tx) => {
+      const fn = extractFunctionName(tx.envelope_xdr);
+      return toHistoryRecord(tx, fn);
+    });
 
   const lastRecord = rawRecords[rawRecords.length - 1];
   const nextCursor = lastRecord ? lastRecord.paging_token : undefined;
