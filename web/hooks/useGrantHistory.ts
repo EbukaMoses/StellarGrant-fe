@@ -45,24 +45,33 @@ export function useGrantHistory(grantId: string): UseGrantHistoryResult {
   const [hasMore, setHasMore] = useState(false);
   const cursorRef = useRef<string | undefined>(undefined);
   const loadMoreInFlightRef = useRef(false);
+  const activeFetchIdRef = useRef(0);
 
   const fetchFirstPage = useCallback(
     async (options?: { showLoading?: boolean; mergeNew?: boolean }) => {
       if (!grantId) return;
       const { showLoading = true, mergeNew = false } = options ?? {};
+      const fetchId = ++activeFetchIdRef.current;
+      const targetGrantId = grantId;
 
       if (showLoading) queueMicrotask(() => setIsLoading(true));
       queueMicrotask(() => setError(null));
 
       await Promise.resolve();
       try {
-        const { records: page, nextCursor } = await getGrantHistory(parseGrantId(grantId));
+        const { records: page, nextCursor } = await getGrantHistory(parseGrantId(targetGrantId));
+        if (fetchId !== activeFetchIdRef.current || targetGrantId !== grantId) {
+          return;
+        }
         cursorRef.current = nextCursor;
         setHasMore(Boolean(nextCursor));
         setRecords((prev) =>
           mergeNew ? mergeRecords(prev, page, false) : page,
         );
       } catch (err) {
+        if (fetchId !== activeFetchIdRef.current || targetGrantId !== grantId) {
+          return;
+        }
         const nextError = err instanceof Error ? err : new Error(String(err));
         setError(nextError);
         if (!mergeNew) {
@@ -71,7 +80,9 @@ export function useGrantHistory(grantId: string): UseGrantHistoryResult {
           cursorRef.current = undefined;
         }
       } finally {
-        if (showLoading) setIsLoading(false);
+        if (fetchId === activeFetchIdRef.current && targetGrantId === grantId) {
+          if (showLoading) setIsLoading(false);
+        }
       }
     },
     [grantId],
@@ -85,18 +96,21 @@ export function useGrantHistory(grantId: string): UseGrantHistoryResult {
   const loadMore = useCallback(async () => {
     const cursor = cursorRef.current;
     if (!grantId || !cursor || loadMoreInFlightRef.current) return;
+    const targetGrantId = grantId;
 
     loadMoreInFlightRef.current = true;
     setError(null);
 
     try {
-      const { records: page, nextCursor } = await getGrantHistory(parseGrantId(grantId), {
+      const { records: page, nextCursor } = await getGrantHistory(parseGrantId(targetGrantId), {
         cursor,
       });
+      if (targetGrantId !== grantId) return;
       cursorRef.current = nextCursor;
       setHasMore(Boolean(nextCursor));
       setRecords((prev) => mergeRecords(prev, page, true));
     } catch (err) {
+      if (targetGrantId !== grantId) return;
       setError(err instanceof Error ? err : new Error(String(err)));
     } finally {
       loadMoreInFlightRef.current = false;
@@ -105,6 +119,7 @@ export function useGrantHistory(grantId: string): UseGrantHistoryResult {
 
   useEffect(() => {
     cursorRef.current = undefined;
+    const fetchIdTracker = activeFetchIdRef;
     queueMicrotask(() => {
       void fetchFirstPage();
     });
@@ -113,7 +128,10 @@ export function useGrantHistory(grantId: string): UseGrantHistoryResult {
       void fetchFirstPage({ showLoading: false, mergeNew: true });
     }, POLL_INTERVAL_MS);
 
-    return () => clearInterval(pollId);
+    return () => {
+      fetchIdTracker.current++;
+      clearInterval(pollId);
+    };
   }, [fetchFirstPage]);
 
   return {
