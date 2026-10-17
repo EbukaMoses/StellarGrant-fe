@@ -29,15 +29,49 @@ const LEVELS: Record<LogLevel, number> = {
   error: 3,
 };
 
-const SENSITIVE_KEYS = new Set(["secret", "privateKey", "seed", "mnemonic", "password"]);
+const SENSITIVE_SUBSTRINGS = [
+  "secret",
+  "private",
+  "password",
+  "mnemonic",
+  "seed",
+];
 
-function maskSensitive(context?: Record<string, unknown>): Record<string, unknown> | undefined {
-  if (!context) return undefined;
-  const masked: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(context)) {
-    masked[k] = SENSITIVE_KEYS.has(k) ? "***" : v;
+export function isSensitiveKey(key: string): boolean {
+  const lower = key.toLowerCase();
+  return SENSITIVE_SUBSTRINGS.some((sub) => lower.includes(sub));
+}
+
+function maskValue(val: unknown, seen = new WeakSet<object>()): unknown {
+  if (val === null || typeof val !== "object") {
+    return val;
   }
-  return masked;
+
+  if (seen.has(val)) {
+    return "[Circular]";
+  }
+  seen.add(val);
+
+  if (Array.isArray(val)) {
+    return val.map((item) => maskValue(item, seen));
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(val)) {
+    if (isSensitiveKey(k)) {
+      result[k] = "***";
+    } else {
+      result[k] = maskValue(v, seen);
+    }
+  }
+  return result;
+}
+
+export function maskSensitive(
+  context?: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  if (!context) return undefined;
+  return maskValue(context) as Record<string, unknown>;
 }
 
 export class Logger implements ILogger {
