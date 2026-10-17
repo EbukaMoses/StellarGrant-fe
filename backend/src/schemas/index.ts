@@ -73,7 +73,10 @@ export const urlSchema = z.string().url().max(2048);
  * GitHub URL validation
  */
 export const githubUrlSchema = urlSchema.refine(
-  (u: string) => /^https:\/\/(www\.)?github\.com\/[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(u),
+  (u: string) =>
+    /^https:\/\/(www\.)?github\.com\/[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(
+      u,
+    ),
   { message: "Invalid GitHub profile URL" },
 );
 
@@ -81,7 +84,8 @@ export const githubUrlSchema = urlSchema.refine(
  * Twitter/X URL validation
  */
 export const twitterUrlSchema = urlSchema.refine(
-  (u: string) => /^https:\/\/(x\.com|twitter\.com)\/[A-Za-z0-9_]{1,15}$/.test(u),
+  (u: string) =>
+    /^https:\/\/(x\.com|twitter\.com)\/[A-Za-z0-9_]{1,15}$/.test(u),
   { message: "Invalid Twitter/X profile URL" },
 );
 
@@ -89,7 +93,8 @@ export const twitterUrlSchema = urlSchema.refine(
  * LinkedIn URL validation
  */
 export const linkedinUrlSchema = urlSchema.refine(
-  (u: string) => /^https:\/\/(www\.)?linkedin\.com\/in\/[A-Za-z0-9-_%]+\/?$/.test(u),
+  (u: string) =>
+    /^https:\/\/(www\.)?linkedin\.com\/in\/[A-Za-z0-9-_%]+\/?$/.test(u),
   { message: "Invalid LinkedIn profile URL" },
 );
 
@@ -229,13 +234,30 @@ export const searchQuerySchema = z.object({
 // Webhook Schemas
 // ---------------------------------------------------------------------------
 
-const WEBHOOK_EVENT_VALUES = Object.values(WebhookEventType) as [string, ...string[]];
+const WEBHOOK_EVENT_VALUES = Object.values(WebhookEventType) as [
+  string,
+  ...string[],
+];
+
+/**
+ * Webhook URL validation
+ *
+ * Rejects non-https schemes and blocks private/loopback/link-local/metadata IPs.
+ * Applied at creation, update, test, and dispatch time.
+ */
+export const safeWebhookUrlSchema = z
+  .string()
+  .url()
+  .max(2048)
+  .refine((url) => url.startsWith("https://"), {
+    message: "Webhook target URL must use HTTPS",
+  });
 
 /**
  * Webhook subscription creation schema
  */
 export const webhookSubscriptionCreateSchema = z.object({
-  targetUrl: z.string().url().max(2048),
+  targetUrl: safeWebhookUrlSchema,
   secretKey: z.string().min(16).max(255),
   events: z.array(z.enum(WEBHOOK_EVENT_VALUES)).min(1).max(20),
   communityId: z.coerce.number().int().positive().optional(),
@@ -245,7 +267,7 @@ export const webhookSubscriptionCreateSchema = z.object({
  * Webhook subscription update schema
  */
 export const webhookSubscriptionUpdateSchema = z.object({
-  targetUrl: z.string().url().max(2048).optional(),
+  targetUrl: safeWebhookUrlSchema.optional(),
   secretKey: z.string().min(16).max(255).optional(),
   events: z.array(z.enum(WEBHOOK_EVENT_VALUES)).min(1).max(20).optional(),
   isActive: z.boolean().optional(),
@@ -255,7 +277,7 @@ export const webhookSubscriptionUpdateSchema = z.object({
  * Webhook test schema
  */
 export const webhookTestSchema = z.object({
-  targetUrl: z.string().url().max(2048),
+  targetUrl: safeWebhookUrlSchema,
   secretKey: z.string().min(16).max(255),
   event: z.enum(WEBHOOK_EVENT_VALUES),
 });
