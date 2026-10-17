@@ -30,6 +30,7 @@ import { env } from "./config/env";
 import { ReconciliationService } from "./services/reconciliation-service";
 import { SorobanContractClient } from "./soroban/types";
 import { AppError } from "./utils/errors";
+import { errorHandler } from "./middlewares/error-handler";
 
 import { User } from "./entities/User";
 import { Role } from "./entities/Role";
@@ -170,6 +171,16 @@ export const createApp = (
   );
   app.use("/ipfs", buildIpfsPresignRouter());
   app.use("/events", buildEventsRouter(activityRepo));
+  app.use(
+    "/webhooks",
+    buildWebhooksRouter(
+      userRepo,
+      webhookSubscriptionRepo,
+      webhookDispatcher,
+      rbacService,
+      signedUserAuth,
+    ),
+  );
   app.use("/users", buildUserRouter(userRepo));
   app.use(
     "/grant_reviewers",

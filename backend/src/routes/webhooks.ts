@@ -1,31 +1,47 @@
-import { Router } from "express";
+import { Router, RequestHandler } from "express";
 import { Repository } from "typeorm";
-import { z } from "zod";
 import { User } from "../entities/User";
 import { WebhookSubscription } from "../entities/WebhookSubscription";
-import { WebhookDispatcher, WebhookPayload } from "../services/webhook-dispatcher";
-import { validateBody, validateParams, validateRequest } from "../middlewares/validation-middleware";
+import {
+  WebhookDispatcher,
+  WebhookPayload,
+} from "../services/webhook-dispatcher";
+import {
+  validateBody,
+  validateParams,
+  validateRequest,
+} from "../middlewares/validation-middleware";
 import {
   webhookSubscriptionCreateSchema,
   webhookSubscriptionUpdateSchema,
   webhookTestSchema,
   idParamSchema,
 } from "../schemas";
-import { createRbacMiddleware, AuthenticatedRequest } from "../middlewares/rbac-middleware";
+import {
+  createRbacMiddleware,
+  AuthenticatedRequest,
+} from "../middlewares/rbac-middleware";
 import { RbacService } from "../services/rbac-service";
 import { Permission } from "../config/rbac";
+import { assertSafeWebhookUrl } from "../utils/ssrf-guard";
 
 export const buildWebhooksRouter = (
   userRepo: Repository<User>,
   subscriptionRepo: Repository<WebhookSubscription>,
   webhookDispatcher: WebhookDispatcher,
   rbacService: RbacService,
+  /**
+   * Signature-verified auth middleware (required — not optional).
+   * Must set `req.user.stellarAddress` before any route handler runs.
+   */
+  signedUserAuth: RequestHandler,
 ) => {
   const router = Router();
   const { requirePermission } = createRbacMiddleware(rbacService);
 
   /**
-   * Helper to get or create user by address
+   * Helper to get or create user by address.
+   * Only called after `signedUserAuth` has already verified the identity.
    */
   async function getOrCreateUser(stellarAddress: string): Promise<User> {
     let user = await userRepo.findOne({ where: { stellarAddress } });
@@ -42,15 +58,22 @@ export const buildWebhooksRouter = (
   }
 
   /**
-   * Helper to resolve the caller's stellar address
+   * Resolve the caller's Stellar address from the *verified* `req.user` object
+   * only.  We never fall back to spoofable headers.
    */
   function getCallerAddress(req: AuthenticatedRequest): string {
-    const address = req.user?.stellarAddress || req.header("x-user-address") || req.header("x-admin-address");
+    const address = req.user?.stellarAddress;
     if (!address) {
+      // This should never happen when signedUserAuth is applied correctly, but
+      // fail closed just in case.
       throw new Error("Authentication required");
     }
     return address;
   }
+
+  // Apply signature-verified auth to every route in this router.
+  // Routes that need a different auth level (admin) override it below.
+  router.use(signedUserAuth);
 
   // ---------------------------------------------------------------------------
   // CRUD endpoints
@@ -84,11 +107,7 @@ export const buildWebhooksRouter = (
       }));
 
       res.json({ data: sanitized });
-    } catch (error: any) {
-      if (error.message === "Authentication required") {
-        res.status(401).json({ error: "Authentication required" });
-        return;
-      }
+    } catch (error) {
       next(error);
     }
   });
@@ -97,156 +116,189 @@ export const buildWebhooksRouter = (
    * POST /webhooks
    * Create a new webhook subscription
    */
-  router.post("/", validateBody(webhookSubscriptionCreateSchema), async (req: AuthenticatedRequest, res, next) => {
-    try {
-      const address = getCallerAddress(req);
-      const user = await getOrCreateUser(address);
-      const body = (req as any).validatedBody;
+  router.post(
+    "/",
+    validateBody(webhookSubscriptionCreateSchema),
+    async (req: AuthenticatedRequest, res, next) => {
+      try {
+        const address = getCallerAddress(req);
+        const body = (req as any).validatedBody;
 
-      const subscription = subscriptionRepo.create({
-        targetUrl: body.targetUrl,
-        secretKey: body.secretKey,
-        events: body.events,
-        createdBy: user.id,
-        communityId: body.communityId ?? null,
-        ownerAddress: address,
-        isActive: true,
-        failureCount: 0,
-        maxRetries: 5,
-      });
+        // SSRF guard — validate the target URL resolves to a public address.
+        await assertSafeWebhookUrl(body.targetUrl);
 
-      const saved = await subscriptionRepo.save(subscription);
+        const user = await getOrCreateUser(address);
 
-      res.status(201).json({
-        data: {
-          id: saved.id,
-          targetUrl: saved.targetUrl,
-          events: saved.events,
-          isActive: saved.isActive,
-          createdAt: saved.createdAt,
-        },
-      });
-    } catch (error: any) {
-      if (error.message === "Authentication required") {
-        res.status(401).json({ error: "Authentication required" });
-        return;
+        const subscription = subscriptionRepo.create({
+          targetUrl: body.targetUrl,
+          secretKey: body.secretKey,
+          events: body.events,
+          createdBy: user.id,
+          communityId: body.communityId ?? null,
+          ownerAddress: address,
+          isActive: true,
+          failureCount: 0,
+          maxRetries: 5,
+        });
+
+        const saved = await subscriptionRepo.save(subscription);
+
+        res.status(201).json({
+          data: {
+            id: saved.id,
+            targetUrl: saved.targetUrl,
+            events: saved.events,
+            isActive: saved.isActive,
+            createdAt: saved.createdAt,
+          },
+        });
+      } catch (error: any) {
+        if (
+          error.message?.includes("HTTPS") ||
+          error.message?.includes("private") ||
+          error.message?.includes("Invalid URL")
+        ) {
+          res.status(422).json({ error: error.message });
+          return;
+        }
+        next(error);
       }
-      next(error);
-    }
-  });
+    },
+  );
 
   /**
    * GET /webhooks/:id
-   * Get a single subscription by ID
+   * Get a single subscription by ID (ownership enforced via `createdBy`)
    */
-  router.get("/:id", validateParams(idParamSchema), async (req: AuthenticatedRequest, res, next) => {
-    try {
-      const { id } = (req as any).validatedParams;
-      const address = getCallerAddress(req);
-      const user = await getOrCreateUser(address);
+  router.get(
+    "/:id",
+    validateParams(idParamSchema),
+    async (req: AuthenticatedRequest, res, next) => {
+      try {
+        const { id } = (req as any).validatedParams;
+        const address = getCallerAddress(req);
+        const user = await getOrCreateUser(address);
 
-      const subscription = await subscriptionRepo.findOne({
-        where: { id, createdBy: user.id },
-      });
+        const subscription = await subscriptionRepo.findOne({
+          where: { id, createdBy: user.id },
+        });
 
-      if (!subscription) {
-        res.status(404).json({ error: "Subscription not found" });
-        return;
+        if (!subscription) {
+          res.status(404).json({ error: "Subscription not found" });
+          return;
+        }
+
+        res.json({
+          data: {
+            id: subscription.id,
+            targetUrl: subscription.targetUrl,
+            events: subscription.events,
+            isActive: subscription.isActive,
+            failureCount: subscription.failureCount,
+            maxRetries: subscription.maxRetries,
+            communityId: subscription.communityId,
+            createdAt: subscription.createdAt,
+            updatedAt: subscription.updatedAt,
+          },
+        });
+      } catch (error) {
+        next(error);
       }
-
-      res.json({
-        data: {
-          id: subscription.id,
-          targetUrl: subscription.targetUrl,
-          events: subscription.events,
-          isActive: subscription.isActive,
-          failureCount: subscription.failureCount,
-          maxRetries: subscription.maxRetries,
-          communityId: subscription.communityId,
-          createdAt: subscription.createdAt,
-          updatedAt: subscription.updatedAt,
-        },
-      });
-    } catch (error: any) {
-      if (error.message === "Authentication required") {
-        res.status(401).json({ error: "Authentication required" });
-        return;
-      }
-      next(error);
-    }
-  });
+    },
+  );
 
   /**
    * PATCH /webhooks/:id
-   * Update a subscription
+   * Update a subscription (ownership enforced via `createdBy`)
    */
-  router.patch("/:id", validateRequest({ params: idParamSchema, body: webhookSubscriptionUpdateSchema }), async (req: AuthenticatedRequest, res, next) => {
-    try {
-      const { id } = (req as any).validatedParams;
-      const address = getCallerAddress(req);
-      const user = await getOrCreateUser(address);
-      const body = (req as any).validatedBody;
+  router.patch(
+    "/:id",
+    validateRequest({
+      params: idParamSchema,
+      body: webhookSubscriptionUpdateSchema,
+    }),
+    async (req: AuthenticatedRequest, res, next) => {
+      try {
+        const { id } = (req as any).validatedParams;
+        const address = getCallerAddress(req);
+        const user = await getOrCreateUser(address);
+        const body = (req as any).validatedBody;
 
-      const subscription = await subscriptionRepo.findOne({
-        where: { id, createdBy: user.id },
-      });
+        // SSRF guard — validate any new target URL.
+        if (body.targetUrl !== undefined) {
+          await assertSafeWebhookUrl(body.targetUrl);
+        }
 
-      if (!subscription) {
-        res.status(404).json({ error: "Subscription not found" });
-        return;
+        const subscription = await subscriptionRepo.findOne({
+          where: { id, createdBy: user.id },
+        });
+
+        if (!subscription) {
+          res.status(404).json({ error: "Subscription not found" });
+          return;
+        }
+
+        if (body.targetUrl !== undefined)
+          subscription.targetUrl = body.targetUrl;
+        if (body.secretKey !== undefined)
+          subscription.secretKey = body.secretKey;
+        if (body.events !== undefined) subscription.events = body.events;
+        if (body.isActive !== undefined) subscription.isActive = body.isActive;
+
+        const saved = await subscriptionRepo.save(subscription);
+
+        res.json({
+          data: {
+            id: saved.id,
+            targetUrl: saved.targetUrl,
+            events: saved.events,
+            isActive: saved.isActive,
+            updatedAt: saved.updatedAt,
+          },
+        });
+      } catch (error: any) {
+        if (
+          error.message?.includes("HTTPS") ||
+          error.message?.includes("private") ||
+          error.message?.includes("Invalid URL")
+        ) {
+          res.status(422).json({ error: error.message });
+          return;
+        }
+        next(error);
       }
-
-      if (body.targetUrl !== undefined) subscription.targetUrl = body.targetUrl;
-      if (body.secretKey !== undefined) subscription.secretKey = body.secretKey;
-      if (body.events !== undefined) subscription.events = body.events;
-      if (body.isActive !== undefined) subscription.isActive = body.isActive;
-
-      const saved = await subscriptionRepo.save(subscription);
-
-      res.json({
-        data: {
-          id: saved.id,
-          targetUrl: saved.targetUrl,
-          events: saved.events,
-          isActive: saved.isActive,
-          updatedAt: saved.updatedAt,
-        },
-      });
-    } catch (error: any) {
-      if (error.message === "Authentication required") {
-        res.status(401).json({ error: "Authentication required" });
-        return;
-      }
-      next(error);
-    }
-  });
+    },
+  );
 
   /**
    * DELETE /webhooks/:id
-   * Delete a subscription
+   * Delete a subscription (ownership enforced via `createdBy`)
    */
-  router.delete("/:id", validateParams(idParamSchema), async (req: AuthenticatedRequest, res, next) => {
-    try {
-      const { id } = (req as any).validatedParams;
-      const address = getCallerAddress(req);
-      const user = await getOrCreateUser(address);
+  router.delete(
+    "/:id",
+    validateParams(idParamSchema),
+    async (req: AuthenticatedRequest, res, next) => {
+      try {
+        const { id } = (req as any).validatedParams;
+        const address = getCallerAddress(req);
+        const user = await getOrCreateUser(address);
 
-      const result = await subscriptionRepo.delete({ id, createdBy: user.id });
+        const result = await subscriptionRepo.delete({
+          id,
+          createdBy: user.id,
+        });
 
-      if (result.affected === 0) {
-        res.status(404).json({ error: "Subscription not found" });
-        return;
+        if (result.affected === 0) {
+          res.status(404).json({ error: "Subscription not found" });
+          return;
+        }
+
+        res.json({ ok: true });
+      } catch (error) {
+        next(error);
       }
-
-      res.json({ ok: true });
-    } catch (error: any) {
-      if (error.message === "Authentication required") {
-        res.status(401).json({ error: "Authentication required" });
-        return;
-      }
-      next(error);
-    }
-  });
+    },
+  );
 
   // ---------------------------------------------------------------------------
   // Delivery logs
@@ -254,41 +306,48 @@ export const buildWebhooksRouter = (
 
   /**
    * GET /webhooks/:id/logs
-   * Get delivery logs for a subscription
+   * Get delivery logs for a subscription (ownership enforced)
    */
-  router.get("/:id/logs", validateParams(idParamSchema), async (req: AuthenticatedRequest, res, next) => {
-    try {
-      const { id } = (req as any).validatedParams;
-      const address = getCallerAddress(req);
-      const user = await getOrCreateUser(address);
+  router.get(
+    "/:id/logs",
+    validateParams(idParamSchema),
+    async (req: AuthenticatedRequest, res, next) => {
+      try {
+        const { id } = (req as any).validatedParams;
+        const address = getCallerAddress(req);
+        const user = await getOrCreateUser(address);
 
-      const subscription = await subscriptionRepo.findOne({
-        where: { id, createdBy: user.id },
-      });
+        const subscription = await subscriptionRepo.findOne({
+          where: { id, createdBy: user.id },
+        });
 
-      if (!subscription) {
-        res.status(404).json({ error: "Subscription not found" });
-        return;
+        if (!subscription) {
+          res.status(404).json({ error: "Subscription not found" });
+          return;
+        }
+
+        const page = Math.max(1, Number(req.query.page ?? "1"));
+        const limit = Math.min(
+          100,
+          Math.max(1, Number(req.query.limit ?? "20")),
+        );
+        const offset = (page - 1) * limit;
+
+        const { logs, total } = await webhookDispatcher.getDeliveryLogs(
+          id,
+          limit,
+          offset,
+        );
+
+        res.json({
+          data: logs,
+          pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+        });
+      } catch (error) {
+        next(error);
       }
-
-      const page = Math.max(1, Number(req.query.page ?? "1"));
-      const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? "20")));
-      const offset = (page - 1) * limit;
-
-      const { logs, total } = await webhookDispatcher.getDeliveryLogs(id, limit, offset);
-
-      res.json({
-        data: logs,
-        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
-      });
-    } catch (error: any) {
-      if (error.message === "Authentication required") {
-        res.status(401).json({ error: "Authentication required" });
-        return;
-      }
-      next(error);
-    }
-  });
+    },
+  );
 
   // ---------------------------------------------------------------------------
   // Test endpoint
@@ -296,60 +355,79 @@ export const buildWebhooksRouter = (
 
   /**
    * POST /webhooks/test
-   * Send a test event to a target URL (no DB persistence)
+   * Send a test event to a target URL (no DB persistence).
+   * Requires authentication and validates the target URL against SSRF rules.
    */
-  router.post("/test", validateBody(webhookTestSchema), async (req: AuthenticatedRequest, res, next) => {
-    try {
-      const body = (req as any).validatedBody;
+  router.post(
+    "/test",
+    validateBody(webhookTestSchema),
+    async (req: AuthenticatedRequest, res, next) => {
+      try {
+        const body = (req as any).validatedBody;
 
-      const payload: WebhookPayload = {
-        event: body.event,
-        timestamp: new Date().toISOString(),
-        data: { message: "This is a test event from StellarGrant" },
-      };
+        // SSRF guard — must pass before we ever open a connection.
+        await assertSafeWebhookUrl(body.targetUrl);
 
-      const signature = WebhookDispatcher.signPayload(payload, body.secretKey);
-
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30000);
-
-      const response = await fetch(body.targetUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Webhook-Signature": `sha256=${signature}`,
-          "X-Webhook-Event": body.event,
-          "X-Webhook-Timestamp": payload.timestamp,
-          "User-Agent": "StellarGrant-Webhook/1.0",
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeout);
-
-      const responseBody = await response.text();
-
-      res.json({
-        ok: response.ok,
-        statusCode: response.status,
-        headers: Object.fromEntries(response.headers.entries()),
-        body: responseBody.slice(0, 2000),
-        sentPayload: payload,
-        sentSignature: signature,
-      });
-    } catch (error: any) {
-      res.status(502).json({
-        ok: false,
-        error: error.message || "Failed to reach target URL",
-        sentPayload: {
-          event: (req as any).validatedBody?.event,
+        const payload: WebhookPayload = {
+          event: body.event,
           timestamp: new Date().toISOString(),
           data: { message: "This is a test event from StellarGrant" },
-        },
-      });
-    }
-  });
+        };
+
+        const signature = WebhookDispatcher.signPayload(
+          payload,
+          body.secretKey,
+        );
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000);
+
+        const response = await fetch(body.targetUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Webhook-Signature": `sha256=${signature}`,
+            "X-Webhook-Event": body.event,
+            "X-Webhook-Timestamp": payload.timestamp,
+            "User-Agent": "StellarGrant-Webhook/1.0",
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+
+        const responseBody = await response.text();
+
+        res.json({
+          ok: response.ok,
+          statusCode: response.status,
+          headers: Object.fromEntries(response.headers.entries()),
+          body: responseBody.slice(0, 2000),
+          sentPayload: payload,
+          sentSignature: signature,
+        });
+      } catch (error: any) {
+        if (
+          error.message?.includes("HTTPS") ||
+          error.message?.includes("private") ||
+          error.message?.includes("Invalid URL")
+        ) {
+          res.status(422).json({ error: error.message });
+          return;
+        }
+        res.status(502).json({
+          ok: false,
+          error: error.message || "Failed to reach target URL",
+          sentPayload: {
+            event: (req as any).validatedBody?.event,
+            timestamp: new Date().toISOString(),
+            data: { message: "This is a test event from StellarGrant" },
+          },
+        });
+      }
+    },
+  );
 
   // ---------------------------------------------------------------------------
   // Admin endpoint to list all subscriptions (admin only)
@@ -384,7 +462,7 @@ export const buildWebhooksRouter = (
       } catch (error) {
         next(error);
       }
-    }
+    },
   );
 
   return router;
