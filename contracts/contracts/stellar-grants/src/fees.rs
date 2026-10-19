@@ -104,6 +104,68 @@ mod tests {
     use soroban_sdk::testutils::{Address as _, Ledger};
     use soroban_sdk::Env;
 
+    fn setup_referral(env: &Env, payer: &Address, referrer: &Address) {
+        let mut cfg = default_config();
+        cfg.protocol_fee_bps = 1000;
+        cfg.referral_fee_bps = 1000;
+        cfg.reviewer_reward_pool_bps = 0;
+        cfg.revenue_share_pool_bps = 0;
+        Storage::set_protocol_config(env, &cfg);
+        Storage::set_referral_record(
+            env,
+            &crate::types::ReferralRecord {
+                referred: payer.clone(),
+                referrer: referrer.clone(),
+                code_hash: soroban_sdk::Bytes::new(env),
+                referred_at: 0,
+                first_action_at: None,
+                reward_paid: false,
+            },
+        );
+    }
+
+    #[test]
+    fn test_referral_failure_emits_context_without_aborting_fee_split() {
+        use soroban_sdk::{testutils::Events, Event, Vec};
+
+        let env = Env::default();
+        let contract_id = env.register(crate::StellarGrantsContract, ());
+        env.as_contract(&contract_id, || {
+            let payer = Address::generate(&env);
+            let referrer = Address::generate(&env);
+            let token = Address::generate(&env);
+            setup_referral(&env, &payer, &referrer);
+            Storage::set_referral_rewards(&env, &referrer, &token, i128::MAX);
+
+            assert_eq!(
+                deduct_and_split_fee(&env, &token, 1_000_000, Some(&payer)),
+                Ok(900_000)
+            );
+            assert_eq!(Storage::get_fees_collected(&env, &token), 100_000);
+            assert_eq!(
+                Storage::get_referral_rewards(&env, &referrer, &token),
+                i128::MAX
+            );
+            let expected = ReferralRewardFailed {
+                payer,
+                token,
+                fee_amount: 100_000,
+                error_code: ContractError::InvalidInput as u32,
+            };
+            assert_eq!(
+                env.events().all(),
+                Vec::from_array(
+                    &env,
+                    [(
+                        contract_id.clone(),
+                        expected.topics(&env),
+                        expected.data(&env),
+                    )]
+                )
+            );
+        });
+    }
+
     #[test]
     fn test_compute_fee_zero_bps() {
         let result = compute_fee(1_000_000, 0).unwrap();
