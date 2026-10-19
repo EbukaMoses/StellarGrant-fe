@@ -267,6 +267,20 @@ Core grant flows now honor these roles without changing the contract structure:
 - `Pauser`: global pause and unpause authority
 - `Admin`: upgrade, treasury, council, and other protocol-level controls
 
+## DAO Proposal Finalization
+
+Anyone can call `dao_finalize` strictly after a proposal's voting deadline.
+It returns and stores `Passed` only when the combined vote weight reaches
+quorum and votes in favor exceed votes against. Otherwise, including when
+there are no votes, it returns and stores `Rejected` and emits
+`DaoProposalFinalized` with `passed: false`.
+
+Missing quorum no longer returns `DaoProposalQuorumNotReached`. Clients should
+inspect the returned status. Rejected proposals cannot be voted on, finalized
+again, cancelled, or executed. Proposer or admin cancellation is not required
+to clear a proposal that missed quorum. A caller must still submit the
+finalization transaction; passing the deadline alone does not execute code.
+
 ## Quadratic Matching and Funder Reports
 
 Matching-pool tokens are deposited when a round is created. Distribution credits

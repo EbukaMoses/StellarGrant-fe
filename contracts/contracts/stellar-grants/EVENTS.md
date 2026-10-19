@@ -166,6 +166,8 @@ must not be indexed:
   - Payload: `proposal_id: u64`, `voter: Address`, `support: bool`, `weight: u64`, `timestamp: u64`
 - **DaoProposalFinalized**: DAO proposal finalized.
   - Payload: `proposal_id: u64`, `passed: bool`, `votes_for: u64`, `votes_against: u64`, `timestamp: u64`
+  - `passed: false` includes proposals finalized without quorum, as well as
+    tied or majority-against proposals. These proposals are stored as `Rejected`.
 - **DaoProposalExecuted**: DAO proposal executed.
   - Payload: `proposal_id: u64`, `executed_by: Address`, `timestamp: u64`
 - **DaoProposalCancelled**: DAO proposal cancelled.

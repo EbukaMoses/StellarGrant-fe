@@ -30,7 +30,7 @@ pub fn set_voting_period(env: &Env, admin: &Address, ledgers: u32) -> Result<(),
 }
 
 /// Configure the minimum total vote weight (for + against) required before a
-/// proposal can be finalized.
+/// proposal can pass. Proposals below quorum are rejected on finalization.
 pub fn set_quorum_votes(env: &Env, admin: &Address, quorum: u64) -> Result<(), ContractError> {
     require_global_admin(env, admin)?;
     if quorum == 0 {
@@ -123,7 +123,14 @@ pub fn vote(
 }
 
 /// Finalize a proposal once its voting deadline has passed: marks it Passed
-/// or Rejected based on simple majority, provided quorum was met.
+/// only if quorum and a simple majority are met; otherwise marks it Rejected.
+/// Anyone may finalize. Returning `Ok(Rejected)` commits the terminal state and
+/// the finalized event, including when there were no votes.
+///
+/// # Errors
+/// Returns `DaoProposalNotFound` for missing proposals, `DaoProposalNotActive`
+/// for terminal proposals, and `DaoProposalVotingClosed` until strictly after
+/// the deadline. Missing quorum is a successful rejection, not an error.
 pub fn finalize(env: &Env, proposal_id: u64) -> Result<DaoProposalStatus, ContractError> {
     let mut proposal =
         Storage::get_dao_proposal(env, proposal_id).ok_or(ContractError::DaoProposalNotFound)?;

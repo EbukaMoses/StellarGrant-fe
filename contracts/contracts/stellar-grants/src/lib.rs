@@ -3061,6 +3061,8 @@ impl StellarGrantsContract {
         dao::vote(&env, &voter, proposal_id, support)
     }
 
+    /// Finalize after the voting deadline, without requiring proposer or admin auth.
+    /// Returns and stores `Rejected` if quorum or a majority was not reached.
     pub fn dao_finalize(env: Env, proposal_id: u64) -> Result<DaoProposalStatus, ContractError> {
         dao::finalize(&env, proposal_id)
     }
