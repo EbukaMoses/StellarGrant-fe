@@ -440,6 +440,78 @@ mod tests {
     }
 
     #[test]
+    fn test_public_finalize_persists_quorum_rejection_and_emits_event() {
+        use soroban_sdk::{testutils::Events as _, Event, Vec};
+
+        let env = Env::default();
+        let contract_id = env.register(crate::StellarGrantsContract, ());
+        let proposer = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            Storage::set_dao_quorum_votes(&env, 2);
+            Storage::set_dao_proposal(
+                &env,
+                &DaoProposal {
+                    id: 1,
+                    proposer: proposer.clone(),
+                    title: String::from_str(&env, "Insufficient participation"),
+                    description: String::from_str(&env, ""),
+                    proposal_type: DaoProposalType::Generic,
+                    status: DaoProposalStatus::Active,
+                    votes_for: 1,
+                    votes_against: 0,
+                    created_at: 0,
+                    voting_deadline: 10,
+                    executed_at: None,
+                },
+            );
+        });
+        env.ledger().with_mut(|ledger| ledger.timestamp = 11);
+        let client = crate::StellarGrantsContractClient::new(&env, &contract_id);
+
+        // No mocked authorizations: finalization requires neither proposer nor admin.
+        assert_eq!(client.dao_finalize(&1), DaoProposalStatus::Rejected);
+        let expected = crate::events::DaoProposalFinalized {
+            proposal_id: 1,
+            passed: false,
+            votes_for: 1,
+            votes_against: 0,
+            timestamp: 11,
+        };
+        assert_eq!(
+            env.events().all(),
+            Vec::from_array(
+                &env,
+                [(
+                    contract_id.clone(),
+                    expected.topics(&env),
+                    expected.data(&env),
+                )]
+            )
+        );
+        assert_eq!(
+            client.get_dao_proposal(&1).unwrap().status,
+            DaoProposalStatus::Rejected
+        );
+        assert_eq!(
+            client.try_dao_finalize(&1),
+            Err(Ok(ContractError::DaoProposalNotActive))
+        );
+        env.mock_all_auths();
+        assert_eq!(
+            client.try_dao_execute(&proposer, &1),
+            Err(Ok(ContractError::DaoProposalRejected))
+        );
+        assert_eq!(
+            client.try_dao_vote(&proposer, &1, &true),
+            Err(Ok(ContractError::DaoProposalNotActive))
+        );
+        assert_eq!(
+            client.try_dao_cancel(&proposer, &1),
+            Err(Ok(ContractError::DaoProposalNotActive))
+        );
+    }
+
+    #[test]
     fn test_execute_non_passed_proposal_rejected() {
         let env = Env::default();
         env.mock_all_auths();
