@@ -122,7 +122,8 @@ function extractFunctionName(envelopeXdr?: string): string | undefined {
   try {
     const env = xdr.TransactionEnvelope.fromXDR(Buffer.from(envelopeXdr, "base64"));
     // Support both V0 and V1 envelopes
-    const tx = env.switch().value().tx();
+    const txEnvelope = env.switch().value() as xdr.TransactionV1Envelope;
+    const tx = txEnvelope.tx();
     const ops = tx.operations();
     const contractId = getContractId();
     if (!contractId) return undefined;
