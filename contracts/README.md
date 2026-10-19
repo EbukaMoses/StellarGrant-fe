@@ -267,6 +267,46 @@ Core grant flows now honor these roles without changing the contract structure:
 - `Pauser`: global pause and unpause authority
 - `Admin`: upgrade, treasury, council, and other protocol-level controls
 
+## DAO Proposal Finalization
+
+Anyone can call `dao_finalize` strictly after a proposal's voting deadline.
+It returns and stores `Passed` only when the combined vote weight reaches
+quorum and votes in favor exceed votes against. Otherwise, including when
+there are no votes, it returns and stores `Rejected` and emits
+`DaoProposalFinalized` with `passed: false`.
+
+Missing quorum no longer returns `DaoProposalQuorumNotReached`. Clients should
+inspect the returned status. Rejected proposals cannot be voted on, finalized
+again, cancelled, or executed. Proposer or admin cancellation is not required
+to clear a proposal that missed quorum. A caller must still submit the
+finalization transaction; passing the deadline alone does not execute code.
+
+## Quadratic Matching and Funder Reports
+
+Matching-pool tokens are deposited when a round is created. Distribution credits
+each allocated amount to the grant's escrow balance and total deposited amount,
+and mirrors the balance on the grant. It does not transfer tokens again.
+
+Pool allocations do not create personal funder ledgers, escrow funder-list
+entries, grant funder entries, or funder-to-grant index entries for the contract
+address. Existing direct funders and their contribution amounts are preserved.
+Matching allocations remain available through the round's allocation queries.
+The pool token must match both the grant and escrow token.
+
+This behavior applies to new distributions; it does not migrate historical
+funder records created by earlier contract versions.
+
+## Milestone IP Licenses
+
+The grant owner can call `attach_license` once for each approved milestone.
+The record includes the SPDX identifier, license type, IP rights, restrictions,
+attaching owner, and timestamp. Use `get_license` to retrieve those terms.
+
+Subsequent attachments for the same grant and milestone return `InvalidState`,
+including retries with identical terms. They preserve the original record and
+emit no additional `LicenseAttached` event. Licenses on other milestones or
+grants remain independent. There is no license amendment entry point.
+
 ## 🧪 Fuzz Testing
 
 ### Running Fuzzers

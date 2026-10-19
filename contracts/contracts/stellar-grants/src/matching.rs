@@ -309,17 +309,18 @@ pub fn distribute(env: &Env, round_id: u32) -> Result<(), ContractError> {
         return Err(ContractError::InvalidState);
     }
 
-    // Distribute match amounts to each grant's escrow. A deposit failure aborts
+    // Distribute match amounts to each grant's escrow. A credit failure aborts
     // the whole call so the round is never marked distributed with some
     // allocations left unfunded and unrecoverable.
     for i in 0..round.allocations.len() {
         if let Some(allocation) = round.allocations.get(i) {
             if allocation.match_amount > 0 {
-                // Transfer match amount to grant's escrow
-                crate::escrow::deposit(
+                // Pool tokens are already held by this contract. Credit escrow
+                // without treating the contract address as a contributor.
+                crate::escrow::credit_matching_pool(
                     env,
                     allocation.grant_id,
-                    &env.current_contract_address(),
+                    &round.token,
                     allocation.match_amount,
                 )?;
             }
@@ -414,6 +415,161 @@ fn compute_grant_qf_score(env: &Env, round_id: u32, grant_id: u64) -> (i128, i12
 mod tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
+
+    fn setup_funded_round() -> (Env, Address, Address, Address) {
+        use crate::storage::Storage;
+        use crate::types::{Grant, GrantStatus};
+        use soroban_sdk::String;
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = crate::test_utils::register_contract(&env);
+        let (token, funder) = env.as_contract(&contract_id, || {
+            let owner = Address::generate(&env);
+            let funder = Address::generate(&env);
+            let token = env
+                .register_stellar_asset_contract_v2(owner.clone())
+                .address();
+            let asset = token::StellarAssetClient::new(&env, &token);
+            asset.mint(&funder, &100);
+            asset.mint(&contract_id, &500);
+            assert_eq!(Storage::increment_grant_counter(&env), 1);
+            Storage::set_grant(
+                &env,
+                1,
+                &Grant {
+                    id: 1,
+                    owner: owner.clone(),
+                    title: String::from_str(&env, "Matched grant"),
+                    description: String::from_str(&env, ""),
+                    token: token.clone(),
+                    status: GrantStatus::Active,
+                    total_amount: 600,
+                    milestone_amount: 600,
+                    reviewers: Vec::new(&env),
+                    total_milestones: 1,
+                    milestones_paid_out: 0,
+                    escrow_balance: 0,
+                    funders: Vec::new(&env),
+                    reason: None,
+                    timestamp: 0,
+                    require_compliance: None,
+                },
+            );
+            crate::escrow::open(&env, 1, &owner, &token).unwrap();
+            crate::escrow::deposit(&env, 1, &funder, 100).unwrap();
+            env.storage().persistent().set(
+                &DataKey::Matching(MatchingKey::Round(1)),
+                &MatchingRound {
+                    id: 1,
+                    token: token.clone(),
+                    matching_pool: 500,
+                    start_ledger: 0,
+                    end_ledger: 1,
+                    eligible_grant_ids: Vec::from_array(&env, [1]),
+                    allocations: Vec::from_array(
+                        &env,
+                        [MatchingAllocation {
+                            grant_id: 1,
+                            direct_contributions: 100,
+                            match_amount: 500,
+                            unique_contributors: 1,
+                            qf_score: 100,
+                        }],
+                    ),
+                    finalized: true,
+                    distributed: false,
+                    created_by: owner,
+                },
+            );
+            (token, funder)
+        });
+        (env, contract_id, token, funder)
+    }
+
+    #[test]
+    fn test_matching_credit_preserves_real_funders_and_token_balance() {
+        use crate::storage::Storage;
+
+        let (env, contract_id, token, funder) = setup_funded_round();
+        env.as_contract(&contract_id, || {
+            let grant_before = Storage::get_grant(&env, 1).unwrap();
+            let ledger_before = Storage::get_funder_ledger(&env, 1, &funder).unwrap();
+            let token_balance = token::Client::new(&env, &token).balance(&contract_id);
+            distribute(&env, 1).unwrap();
+
+            let account = crate::escrow::get_account(&env, 1).unwrap();
+            assert_eq!(account.balance, 600);
+            assert_eq!(account.total_deposited, 600);
+            let grant = Storage::get_grant(&env, 1).unwrap();
+            assert_eq!(grant.escrow_balance, 600);
+            assert_eq!(grant.funders, grant_before.funders);
+            assert_eq!(
+                Storage::get_funder_ledger(&env, 1, &funder),
+                Some(ledger_before)
+            );
+            assert!(Storage::get_funder_ledger(&env, 1, &contract_id).is_none());
+            assert_eq!(
+                Storage::get_escrow_funders_list(&env, 1),
+                Vec::from_array(&env, [funder])
+            );
+            assert!(Storage::get_funder_grant_index(&env, &contract_id).is_empty());
+            assert_eq!(
+                crate::funder_report::get_report(&env, &contract_id)
+                    .unwrap()
+                    .total_grants_funded,
+                0
+            );
+            assert_eq!(
+                token::Client::new(&env, &token).balance(&contract_id),
+                token_balance
+            );
+            assert!(get_round(&env, 1).unwrap().distributed);
+            assert_eq!(distribute(&env, 1), Err(ContractError::InvalidState));
+            assert_eq!(crate::escrow::get_account(&env, 1).unwrap().balance, 600);
+        });
+    }
+
+    #[test]
+    fn test_matching_credit_rejects_invalid_amount_token_and_overflow() {
+        use crate::storage::Storage;
+
+        let (env, contract_id, token, _) = setup_funded_round();
+        env.as_contract(&contract_id, || {
+            let before = crate::escrow::get_account(&env, 1).unwrap();
+            let wrong_token = Address::generate(&env);
+            for amount in [0, -1] {
+                assert_eq!(
+                    crate::escrow::credit_matching_pool(&env, 1, &token, amount),
+                    Err(ContractError::ZeroAmount)
+                );
+            }
+            assert_eq!(
+                crate::escrow::credit_matching_pool(&env, 1, &wrong_token, 500),
+                Err(ContractError::InvalidInput)
+            );
+            assert_eq!(
+                crate::escrow::credit_matching_pool(&env, 999, &token, 500),
+                Err(ContractError::EscrowNotFound)
+            );
+            assert_eq!(crate::escrow::get_account(&env, 1).unwrap(), before);
+            for overflow_balance in [true, false] {
+                let mut account = before.clone();
+                if overflow_balance {
+                    account.balance = i128::MAX;
+                } else {
+                    account.total_deposited = i128::MAX;
+                }
+                Storage::set_escrow_account(&env, 1, &account);
+                assert_eq!(
+                    crate::escrow::credit_matching_pool(&env, 1, &token, 1),
+                    Err(ContractError::InvalidInput)
+                );
+                assert_eq!(crate::escrow::get_account(&env, 1).unwrap(), account);
+                assert_eq!(Storage::get_grant(&env, 1).unwrap().escrow_balance, 100);
+            }
+        });
+    }
 
     #[test]
     fn test_isqrt_zero() {

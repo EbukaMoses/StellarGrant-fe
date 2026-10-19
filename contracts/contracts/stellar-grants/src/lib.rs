@@ -3061,6 +3061,8 @@ impl StellarGrantsContract {
         dao::vote(&env, &voter, proposal_id, support)
     }
 
+    /// Finalize after the voting deadline, without requiring proposer or admin auth.
+    /// Returns and stores `Rejected` if quorum or a majority was not reached.
     pub fn dao_finalize(env: Env, proposal_id: u64) -> Result<DaoProposalStatus, ContractError> {
         dao::finalize(&env, proposal_id)
     }
@@ -3890,7 +3892,9 @@ impl StellarGrantsContract {
     // ── Issue #579: IP License Tracking ──────────────────────────────────────
 
     /// Attach an IP license record to a milestone deliverable.
-    /// Only the grant owner may call this after the milestone exists.
+    /// Only the grant owner may call this after the milestone is approved.
+    /// Returns `InvalidState` if a license is already attached, even if the terms
+    /// are identical. Existing records cannot be amended through this entry point.
     #[allow(clippy::too_many_arguments)]
     pub fn attach_license(
         env: Env,

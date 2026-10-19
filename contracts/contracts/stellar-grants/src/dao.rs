@@ -30,7 +30,7 @@ pub fn set_voting_period(env: &Env, admin: &Address, ledgers: u32) -> Result<(),
 }
 
 /// Configure the minimum total vote weight (for + against) required before a
-/// proposal can be finalized.
+/// proposal can pass. Proposals below quorum are rejected on finalization.
 pub fn set_quorum_votes(env: &Env, admin: &Address, quorum: u64) -> Result<(), ContractError> {
     require_global_admin(env, admin)?;
     if quorum == 0 {
@@ -123,7 +123,14 @@ pub fn vote(
 }
 
 /// Finalize a proposal once its voting deadline has passed: marks it Passed
-/// or Rejected based on simple majority, provided quorum was met.
+/// only if quorum and a simple majority are met; otherwise marks it Rejected.
+/// Anyone may finalize. Returning `Ok(Rejected)` commits the terminal state and
+/// the finalized event, including when there were no votes.
+///
+/// # Errors
+/// Returns `DaoProposalNotFound` for missing proposals, `DaoProposalNotActive`
+/// for terminal proposals, and `DaoProposalVotingClosed` until strictly after
+/// the deadline. Missing quorum is a successful rejection, not an error.
 pub fn finalize(env: &Env, proposal_id: u64) -> Result<DaoProposalStatus, ContractError> {
     let mut proposal =
         Storage::get_dao_proposal(env, proposal_id).ok_or(ContractError::DaoProposalNotFound)?;
@@ -136,11 +143,8 @@ pub fn finalize(env: &Env, proposal_id: u64) -> Result<DaoProposalStatus, Contra
     }
 
     let total_votes = proposal.votes_for.saturating_add(proposal.votes_against);
-    if total_votes < Storage::get_dao_quorum_votes(env) {
-        return Err(ContractError::DaoProposalQuorumNotReached);
-    }
-
-    let passed = proposal.votes_for > proposal.votes_against;
+    let passed = total_votes >= Storage::get_dao_quorum_votes(env)
+        && proposal.votes_for > proposal.votes_against;
     proposal.status = if passed {
         DaoProposalStatus::Passed
     } else {
@@ -365,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn test_finalize_quorum_not_reached_rejected() {
+    fn test_finalize_quorum_not_reached_persists_rejection() {
         let env = Env::default();
         env.mock_all_auths();
         with_contract(&env, || {
@@ -384,8 +388,134 @@ mod tests {
             });
 
             let result = finalize(&env, id);
-            assert_eq!(result, Err(ContractError::DaoProposalQuorumNotReached));
+            assert_eq!(result, Ok(DaoProposalStatus::Rejected));
+            let proposal = get_proposal(&env, id).unwrap();
+            assert_eq!(proposal.status, DaoProposalStatus::Rejected);
+            assert_eq!(proposal.executed_at, None);
+            assert_eq!(finalize(&env, id), Err(ContractError::DaoProposalNotActive));
+            assert_eq!(
+                execute(&env, &proposer, id),
+                Err(ContractError::DaoProposalRejected)
+            );
         });
+    }
+
+    #[test]
+    fn test_finalize_deadline_quorum_and_majority_boundaries() {
+        for (votes_for, votes_against, expected) in [
+            (0, 0, DaoProposalStatus::Rejected),
+            (9, 0, DaoProposalStatus::Rejected),
+            (10, 0, DaoProposalStatus::Passed),
+            (5, 5, DaoProposalStatus::Rejected),
+            (4, 6, DaoProposalStatus::Rejected),
+            (u64::MAX, 1, DaoProposalStatus::Passed),
+        ] {
+            let env = Env::default();
+            with_contract(&env, || {
+                Storage::set_dao_quorum_votes(&env, 10);
+                let proposal = DaoProposal {
+                    id: 1,
+                    proposer: Address::generate(&env),
+                    title: String::from_str(&env, "Boundary test"),
+                    description: String::from_str(&env, ""),
+                    proposal_type: DaoProposalType::Generic,
+                    status: DaoProposalStatus::Active,
+                    votes_for,
+                    votes_against,
+                    created_at: 0,
+                    voting_deadline: 10,
+                    executed_at: None,
+                };
+                Storage::set_dao_proposal(&env, &proposal);
+                for timestamp in [9, 10] {
+                    env.ledger().with_mut(|ledger| ledger.timestamp = timestamp);
+                    assert_eq!(
+                        finalize(&env, 1),
+                        Err(ContractError::DaoProposalVotingClosed)
+                    );
+                    assert_eq!(get_proposal(&env, 1), Some(proposal.clone()));
+                }
+                env.ledger().with_mut(|ledger| ledger.timestamp = 11);
+                assert_eq!(finalize(&env, 1), Ok(expected.clone()));
+                let finalized = get_proposal(&env, 1).unwrap();
+                assert_eq!(finalized.status, expected);
+                assert_eq!(finalized.votes_for, votes_for);
+                assert_eq!(finalized.votes_against, votes_against);
+                assert_eq!(finalized.executed_at, None);
+            });
+        }
+    }
+
+    #[test]
+    fn test_public_finalize_persists_quorum_rejection_and_emits_event() {
+        use soroban_sdk::{testutils::Events as _, Event, Vec};
+
+        let env = Env::default();
+        let contract_id = env.register(crate::StellarGrantsContract, ());
+        let proposer = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            Storage::set_dao_quorum_votes(&env, 2);
+            Storage::set_dao_proposal(
+                &env,
+                &DaoProposal {
+                    id: 1,
+                    proposer: proposer.clone(),
+                    title: String::from_str(&env, "Insufficient participation"),
+                    description: String::from_str(&env, ""),
+                    proposal_type: DaoProposalType::Generic,
+                    status: DaoProposalStatus::Active,
+                    votes_for: 1,
+                    votes_against: 0,
+                    created_at: 0,
+                    voting_deadline: 10,
+                    executed_at: None,
+                },
+            );
+        });
+        env.ledger().with_mut(|ledger| ledger.timestamp = 11);
+        let client = crate::StellarGrantsContractClient::new(&env, &contract_id);
+
+        // No mocked authorizations: finalization requires neither proposer nor admin.
+        assert_eq!(client.dao_finalize(&1), DaoProposalStatus::Rejected);
+        let expected = crate::events::DaoProposalFinalized {
+            proposal_id: 1,
+            passed: false,
+            votes_for: 1,
+            votes_against: 0,
+            timestamp: 11,
+        };
+        assert_eq!(
+            env.events().all(),
+            Vec::from_array(
+                &env,
+                [(
+                    contract_id.clone(),
+                    expected.topics(&env),
+                    expected.data(&env),
+                )]
+            )
+        );
+        assert_eq!(
+            client.get_dao_proposal(&1).unwrap().status,
+            DaoProposalStatus::Rejected
+        );
+        assert_eq!(
+            client.try_dao_finalize(&1),
+            Err(Ok(ContractError::DaoProposalNotActive))
+        );
+        env.mock_all_auths();
+        assert_eq!(
+            client.try_dao_execute(&proposer, &1),
+            Err(Ok(ContractError::DaoProposalRejected))
+        );
+        assert_eq!(
+            client.try_dao_vote(&proposer, &1, &true),
+            Err(Ok(ContractError::DaoProposalNotActive))
+        );
+        assert_eq!(
+            client.try_dao_cancel(&proposer, &1),
+            Err(Ok(ContractError::DaoProposalNotActive))
+        );
     }
 
     #[test]

@@ -4,7 +4,13 @@ use crate::types::{ContractError, IpRights, LicenseRecord, LicenseType, Mileston
 use soroban_sdk::{Address, Env, String};
 
 /// Attach a license record to an approved milestone deliverable.
-/// Only the grant owner may call this. The milestone must already exist.
+/// Only the grant owner may call this. Each milestone may have one license record.
+///
+/// # Errors
+/// Returns `Unauthorized` for callers other than the owner, `GrantNotFound` for
+/// missing grants, `MilestoneIndexOutOfBounds` or `MilestoneNotFound` for invalid
+/// milestones, and `InvalidState` for unapproved or already licensed milestones.
+/// A rejected attachment preserves the original terms and emits no license event.
 pub fn attach_license(
     env: &Env,
     caller: &Address,
@@ -27,6 +33,9 @@ pub fn attach_license(
     let milestone = Storage::get_milestone(env, grant_id, milestone_idx)
         .ok_or(ContractError::MilestoneNotFound)?;
     if milestone.state != MilestoneState::Approved {
+        return Err(ContractError::InvalidState);
+    }
+    if Storage::get_license_record(env, grant_id, milestone_idx).is_some() {
         return Err(ContractError::InvalidState);
     }
 
@@ -157,6 +166,129 @@ mod tests {
             let fetched = get_license(&env, 1, 0).unwrap();
             assert_eq!(fetched, record);
         });
+    }
+
+    #[test]
+    fn test_attach_license_rejects_overwrite() {
+        let (env, contract_id, owner, _) = setup();
+        let original = env.as_contract(&contract_id, || {
+            create_grant_with_milestone(&env, &owner, 1);
+            attach_license(
+                &env,
+                &owner,
+                1,
+                0,
+                String::from_str(&env, "MIT"),
+                LicenseType::OpenSource,
+                IpRights {
+                    commercial_use: true,
+                    modification: true,
+                    distribution: true,
+                    sublicense: true,
+                },
+                String::from_str(&env, "Preserve copyright notice"),
+            )
+            .unwrap()
+        });
+
+        env.as_contract(&contract_id, || {
+            let result = attach_license(
+                &env,
+                &owner,
+                1,
+                0,
+                String::from_str(&env, "PROPRIETARY"),
+                LicenseType::Proprietary,
+                IpRights {
+                    commercial_use: false,
+                    modification: false,
+                    distribution: false,
+                    sublicense: false,
+                },
+                String::from_str(&env, "All rights reserved"),
+            );
+
+            assert_eq!(result, Err(ContractError::InvalidState));
+            assert_eq!(get_license(&env, 1, 0), Some(original));
+        });
+    }
+
+    #[test]
+    fn test_license_records_are_scoped_to_grant_and_milestone() {
+        let (env, contract_id, owner, _) = setup();
+        for (grant_id, milestone_idx) in [(1, 0), (1, 1), (2, 0)] {
+            env.as_contract(&contract_id, || {
+                if milestone_idx == 0 {
+                    create_grant_with_milestone(&env, &owner, grant_id);
+                } else {
+                    let mut milestone = Storage::get_milestone(&env, grant_id, 0).unwrap();
+                    milestone.idx = milestone_idx;
+                    Storage::set_milestone(&env, grant_id, milestone_idx, &milestone);
+                }
+                let record = attach_license(
+                    &env,
+                    &owner,
+                    grant_id,
+                    milestone_idx,
+                    String::from_str(&env, "MIT"),
+                    LicenseType::OpenSource,
+                    IpRights {
+                        commercial_use: true,
+                        modification: true,
+                        distribution: true,
+                        sublicense: true,
+                    },
+                    String::from_str(&env, ""),
+                )
+                .unwrap();
+                assert_eq!(get_license(&env, grant_id, milestone_idx), Some(record));
+            });
+        }
+    }
+
+    #[test]
+    fn test_public_attach_license_preserves_record_and_events_on_retry() {
+        use soroban_sdk::testutils::{Events, Ledger};
+
+        let (env, contract_id, owner, _) = setup();
+        env.as_contract(&contract_id, || {
+            create_grant_with_milestone(&env, &owner, 1);
+        });
+        let client = crate::StellarGrantsContractClient::new(&env, &contract_id);
+        let spdx_id = String::from_str(&env, "MIT");
+        let rights = IpRights {
+            commercial_use: true,
+            modification: true,
+            distribution: true,
+            sublicense: true,
+        };
+        let restrictions = String::from_str(&env, "Preserve copyright notice");
+        let original = client.attach_license(
+            &owner,
+            &1,
+            &0,
+            &spdx_id,
+            &LicenseType::OpenSource,
+            &rights,
+            &restrictions,
+        );
+        let events = env.events().all();
+        env.ledger().with_mut(|ledger| ledger.timestamp += 60);
+
+        assert_eq!(
+            client.try_attach_license(
+                &owner,
+                &1,
+                &0,
+                &spdx_id,
+                &LicenseType::OpenSource,
+                &rights,
+                &restrictions,
+            ),
+            Err(Ok(ContractError::InvalidState))
+        );
+        assert_eq!(client.get_license(&1, &0), Some(original));
+        assert_eq!(env.events().all(), events);
     }
 
     #[test]

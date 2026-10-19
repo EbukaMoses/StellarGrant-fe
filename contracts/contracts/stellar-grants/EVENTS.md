@@ -166,6 +166,8 @@ must not be indexed:
   - Payload: `proposal_id: u64`, `voter: Address`, `support: bool`, `weight: u64`, `timestamp: u64`
 - **DaoProposalFinalized**: DAO proposal finalized.
   - Payload: `proposal_id: u64`, `passed: bool`, `votes_for: u64`, `votes_against: u64`, `timestamp: u64`
+  - `passed: false` includes proposals finalized without quorum, as well as
+    tied or majority-against proposals. These proposals are stored as `Rejected`.
 - **DaoProposalExecuted**: DAO proposal executed.
   - Payload: `proposal_id: u64`, `executed_by: Address`, `timestamp: u64`
 - **DaoProposalCancelled**: DAO proposal cancelled.
@@ -314,6 +316,15 @@ must not be indexed:
 
 ### Referrals (`referral.rs`)
 
+- **ReferralRewardFailed** (`fees.rs`): A referral reward trigger returned an
+  error after the protocol fee was split. The payment continues with its
+  calculated net amount; this event does not imply a retry or rollback.
+  - Topic: `referral_reward_failed`
+  - Payload: `payer: Address`, `token: Address`, `fee_amount: i128`, `error_code: u32`
+  - `fee_amount` is the protocol fee passed to the referral trigger, not the
+    reward amount. `error_code` is the numeric `ContractError` discriminant.
+  - Successful rewards and no-op triggers emit no failure event. Monitor this
+    event to investigate referral accounting failures.
 - **ReferralCodeCreated**: Referral code created.
   - Payload: `referrer: Address`, `code_hash: Bytes`
 - **ReferralApplied**: Referral code applied.

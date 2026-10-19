@@ -124,6 +124,38 @@ pub fn deposit(
     Ok(())
 }
 
+/// Credit a matching allocation whose tokens are already held by the contract.
+/// This internal path does not transfer tokens or register a funder.
+/// The caller must account for the allocation in its matching round.
+pub(crate) fn credit_matching_pool(
+    env: &Env,
+    grant_id: u64,
+    token: &Address,
+    amount: i128,
+) -> Result<(), ContractError> {
+    crate::reentrancy::protect(env)?;
+    if amount <= 0 {
+        return Err(ContractError::ZeroAmount);
+    }
+    let mut account = load_account(env, grant_id)?;
+    let mut grant = Storage::get_grant(env, grant_id).ok_or(ContractError::GrantNotFound)?;
+    if account.token != *token || grant.token != *token {
+        return Err(ContractError::InvalidInput);
+    }
+    account.balance = account
+        .balance
+        .checked_add(amount)
+        .ok_or(ContractError::InvalidInput)?;
+    account.total_deposited = account
+        .total_deposited
+        .checked_add(amount)
+        .ok_or(ContractError::InvalidInput)?;
+    grant.escrow_balance = account.balance;
+    Storage::set_escrow_account(env, grant_id, &account);
+    Storage::set_grant(env, grant_id, &grant);
+    Ok(())
+}
+
 /// Release `amount` from escrow to `recipient` (milestone payout).
 pub fn release(
     env: &Env,

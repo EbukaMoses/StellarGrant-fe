@@ -1,9 +1,19 @@
-use soroban_sdk::{token, Address, Env};
+use soroban_sdk::{contractevent, token, Address, Env};
 
 use crate::config;
 use crate::referral;
 use crate::storage::Storage;
 use crate::types::ContractError;
+
+/// A referral trigger returned an error after the protocol fee was split.
+#[contractevent]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReferralRewardFailed {
+    pub payer: Address,
+    pub token: Address,
+    pub fee_amount: i128,
+    pub error_code: u32,
+}
 
 /// Compute protocol fee from gross amount. Used in tests for fee calculation validation.
 #[allow(dead_code)]
@@ -25,6 +35,9 @@ pub fn net_of_fee(gross: i128, fee_bps: u32) -> Result<i128, ContractError> {
 /// then return the net amount payable to the grant recipient.
 ///
 /// Called automatically by the payment flow in `lib.rs`.
+/// Referral trigger errors emit `ReferralRewardFailed` without aborting the
+/// payment or reversing the fee split. Successful and no-op triggers do not
+/// emit that event.
 pub fn deduct_and_split_fee(
     env: &Env,
     token: &Address,
@@ -67,7 +80,15 @@ pub fn deduct_and_split_fee(
     // #1059: trigger referral reward on the payer's first qualifying payout.
     // `payer` is the grant owner receiving funds — check if they have a referral record.
     if let Some(payer) = payer {
-        let _ = referral::trigger_reward(env, payer, token, total_fee);
+        if let Err(error) = referral::trigger_reward(env, payer, token, total_fee) {
+            ReferralRewardFailed {
+                payer: payer.clone(),
+                token: token.clone(),
+                fee_amount: total_fee,
+                error_code: error as u32,
+            }
+            .publish(env);
+        }
     }
 
     Ok(net)
@@ -85,6 +106,145 @@ mod tests {
     use crate::types::{ProtocolConfig, ReviewerRewardPool};
     use soroban_sdk::testutils::{Address as _, Ledger};
     use soroban_sdk::Env;
+
+    fn setup_referral(env: &Env, payer: &Address, referrer: &Address) {
+        let mut cfg = default_config();
+        cfg.protocol_fee_bps = 1000;
+        cfg.referral_fee_bps = 1000;
+        cfg.reviewer_reward_pool_bps = 0;
+        cfg.revenue_share_pool_bps = 0;
+        Storage::set_protocol_config(env, &cfg);
+        Storage::set_referral_record(
+            env,
+            &crate::types::ReferralRecord {
+                referred: payer.clone(),
+                referrer: referrer.clone(),
+                code_hash: soroban_sdk::Bytes::new(env),
+                referred_at: 0,
+                first_action_at: None,
+                reward_paid: false,
+            },
+        );
+    }
+
+    #[test]
+    fn test_referral_failure_emits_context_without_aborting_fee_split() {
+        use soroban_sdk::{testutils::Events, Event, Vec};
+
+        let env = Env::default();
+        let contract_id = env.register(crate::StellarGrantsContract, ());
+        env.as_contract(&contract_id, || {
+            let payer = Address::generate(&env);
+            let referrer = Address::generate(&env);
+            let token = Address::generate(&env);
+            setup_referral(&env, &payer, &referrer);
+            Storage::set_referral_rewards(&env, &referrer, &token, i128::MAX);
+
+            assert_eq!(
+                deduct_and_split_fee(&env, &token, 1_000_000, Some(&payer)),
+                Ok(900_000)
+            );
+            assert_eq!(Storage::get_fees_collected(&env, &token), 100_000);
+            assert_eq!(
+                Storage::get_referral_rewards(&env, &referrer, &token),
+                i128::MAX
+            );
+            let expected = ReferralRewardFailed {
+                payer,
+                token,
+                fee_amount: 100_000,
+                error_code: ContractError::InvalidInput as u32,
+            };
+            assert_eq!(
+                env.events().all(),
+                Vec::from_array(
+                    &env,
+                    [(
+                        contract_id.clone(),
+                        expected.topics(&env),
+                        expected.data(&env),
+                    )]
+                )
+            );
+        });
+    }
+
+    #[test]
+    fn test_successful_referral_emits_reward_without_failure() {
+        use soroban_sdk::{testutils::Events, Event, Vec};
+
+        let env = Env::default();
+        let contract_id = env.register(crate::StellarGrantsContract, ());
+        env.as_contract(&contract_id, || {
+            let payer = Address::generate(&env);
+            let referrer = Address::generate(&env);
+            let token = Address::generate(&env);
+            setup_referral(&env, &payer, &referrer);
+            assert_eq!(
+                deduct_and_split_fee(&env, &token, 1_000_000, Some(&payer)),
+                Ok(900_000)
+            );
+            assert_eq!(
+                Storage::get_referral_rewards(&env, &referrer, &token),
+                10_000
+            );
+            let expected = crate::referral::ReferralRewardEarned {
+                referrer,
+                referred: payer,
+                token,
+                amount: 10_000,
+            };
+            assert_eq!(
+                env.events().all(),
+                Vec::from_array(
+                    &env,
+                    [(
+                        contract_id.clone(),
+                        expected.topics(&env),
+                        expected.data(&env),
+                    )]
+                )
+            );
+        });
+    }
+
+    #[test]
+    fn test_referral_no_ops_do_not_emit_failure_events() {
+        use soroban_sdk::testutils::Events;
+
+        // No payer, no referral record, already rewarded, and zero protocol fee.
+        for scenario in 0..4 {
+            let env = Env::default();
+            let contract_id = env.register(crate::StellarGrantsContract, ());
+            env.as_contract(&contract_id, || {
+                let payer = Address::generate(&env);
+                let referrer = Address::generate(&env);
+                let token = Address::generate(&env);
+                setup_referral(&env, &payer, &referrer);
+                let mut record = Storage::get_referral_record(&env, &payer).unwrap();
+                record.reward_paid = true;
+                Storage::set_referral_record(&env, &record);
+                let caller = if scenario == 0 { None } else { Some(&payer) };
+                let unknown = Address::generate(&env);
+                let caller = if scenario == 1 {
+                    Some(&unknown)
+                } else {
+                    caller
+                };
+                let mut cfg = config::get_config(&env);
+                if scenario == 3 {
+                    cfg.protocol_fee_bps = 0;
+                    Storage::set_protocol_config(&env, &cfg);
+                }
+                let expected_net = if scenario == 3 { 1_000_000 } else { 900_000 };
+                assert_eq!(
+                    deduct_and_split_fee(&env, &token, 1_000_000, caller),
+                    Ok(expected_net)
+                );
+                assert!(env.events().all().events().is_empty());
+            });
+        }
+    }
 
     #[test]
     fn test_compute_fee_zero_bps() {
