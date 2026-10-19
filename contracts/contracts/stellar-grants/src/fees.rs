@@ -1,9 +1,19 @@
-use soroban_sdk::{token, Address, Env};
+use soroban_sdk::{contractevent, token, Address, Env};
 
 use crate::config;
 use crate::referral;
 use crate::storage::Storage;
 use crate::types::ContractError;
+
+/// A referral trigger returned an error after the protocol fee was split.
+#[contractevent]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReferralRewardFailed {
+    pub payer: Address,
+    pub token: Address,
+    pub fee_amount: i128,
+    pub error_code: u32,
+}
 
 /// Compute protocol fee from gross amount. Used in tests for fee calculation validation.
 #[allow(dead_code)]
@@ -67,7 +77,15 @@ pub fn deduct_and_split_fee(
     // #1059: trigger referral reward on the payer's first qualifying payout.
     // `payer` is the grant owner receiving funds — check if they have a referral record.
     if let Some(payer) = payer {
-        let _ = referral::trigger_reward(env, payer, token, total_fee);
+        if let Err(error) = referral::trigger_reward(env, payer, token, total_fee) {
+            ReferralRewardFailed {
+                payer: payer.clone(),
+                token: token.clone(),
+                fee_amount: total_fee,
+                error_code: error as u32,
+            }
+            .publish(env);
+        }
     }
 
     Ok(net)
