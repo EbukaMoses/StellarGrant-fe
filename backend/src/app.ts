@@ -47,6 +47,7 @@ import { buildGrantReviewerRouter } from "./routes/grant-reviewers";
 import { NonceService } from "./services/nonce-service";
 import { UsedNonce } from "./entities/UsedNonce";
 import { buildMilestoneApprovalNotifyRouter } from "./routes/milestone-approvals-notify";
+import { buildMilestoneApprovalRouter } from "./routes/milestone-approvals";
 import { buildMilestoneCommentsRouter } from "./routes/milestone-comments";
 import {
   buildDisputesRouter,
@@ -75,7 +76,18 @@ export const createApp = (
 ) => {
   const app = express();
   app.use(helmet());
-  app.use(cors());
+  app.use(
+    cors({
+      credentials: true,
+      origin: (origin, callback) => {
+        if (!origin || env.corsOrigins.includes(origin)) {
+          callback(null, true);
+          return;
+        }
+        callback(null, false);
+      },
+    }),
+  );
   app.use(morgan("tiny"));
   app.use(express.json());
 
@@ -182,28 +194,24 @@ export const createApp = (
     ),
   );
   app.use("/users", buildUserRouter(userRepo));
-  app.use(
-    "/grant_reviewers",
-    buildGrantReviewerRouter(
-      reviewerRepo,
-      signatureService,
-      grantRepo,
-      nonceService,
-    ),
-  );
+  app.use("/grant_reviewers", buildGrantReviewerRouter(reviewerRepo, signatureService, grantRepo, nonceService));
   app.use(
     "/milestone_approvals_notify",
     buildMilestoneApprovalNotifyRouter(
       approvalRepo,
       grantRepo,
       userRepo,
+      reviewerRepo,
+      signatureService,
+      nonceService,
       webhookDispatcher,
     ),
   );
   app.use(
-    "/disputes",
-    buildDisputesRouter(dataSource, rbacService, webhookDispatcher),
+    "/milestone_approvals",
+    buildMilestoneApprovalRouter(approvalRepo, grantRepo, reviewerRepo, signatureService, nonceService),
   );
+  app.use("/disputes", buildDisputesRouter(dataSource, rbacService, webhookDispatcher));
   app.use("/", buildGrantDisputesRouter(dataSource));
   app.use(
     "/",
