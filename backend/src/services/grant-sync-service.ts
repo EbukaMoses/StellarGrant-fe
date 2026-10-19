@@ -34,7 +34,7 @@ export class GrantSyncService {
       await this.upsertMilestones(grant, savedGrant);
       await this.updateContributorReputation(savedGrant);
       if (savedGrant.status === "disputed") {
-        await this.ensureDisputeRecord(savedGrant);
+        await this.ensureDisputeRecord(savedGrant, grant);
       }
     }
   }
@@ -73,47 +73,80 @@ export class GrantSyncService {
   }
 
   private async updateContributorReputation(grant: Grant): Promise<void> {
+    // Only award the bonus for completed grants (#1232).
+    if (grant.status !== "completed") return;
+
     const address = grant.recipient;
-    let contributor = await this.contributorRepo.findOne({ where: { address } });
+    const reputationGain = 100;
 
-    if (!contributor) {
-      contributor = this.contributorRepo.create({
-        address,
-        reputation: 0,
-        totalGrantsCompleted: 0,
+    // Wrap check-then-award in a transaction so concurrent syncs cannot
+    // double-award the same (address, grantId, gain) triple (#1233).
+    await this.dataSource.transaction(async (manager) => {
+      let contributor = await manager.getRepository(Contributor).findOne({ where: { address } });
+
+      if (!contributor) {
+        contributor = manager.getRepository(Contributor).create({
+          address,
+          reputation: 0,
+          totalGrantsCompleted: 0,
+        });
+      }
+
+      // Scope the existence check to (address, grantId, gain) so each
+      // completed grant gets its own bonus (#1232).
+      const existingLog = await manager.getRepository(ReputationLog).findOne({
+        where: { address, grantId: grant.id, gain: reputationGain },
       });
-    }
 
-    // Check if we already logged reputation for this grant
-    const existingLog = await this.reputationLogRepo.findOne({
-      where: { address, gain: 100 },
-      order: { timestamp: "DESC" },
+      if (!existingLog) {
+        contributor.reputation = (contributor.reputation ?? 0) + reputationGain;
+        await manager.getRepository(Contributor).save(contributor);
+
+        await manager.getRepository(ReputationLog).save({
+          address,
+          gain: reputationGain,
+          grantId: grant.id,
+          timestamp: new Date(),
+        });
+      }
     });
+  }
 
-    // Only award reputation if it hasn't been logged yet
-    if (!existingLog) {
-      const reputationGain = 100;
-      contributor.reputation = (contributor.reputation ?? 0) + reputationGain;
-      await this.contributorRepo.save(contributor);
-
-      // Log the reputation gain
-      await this.reputationLogRepo.save({
-        address,
-        gain: reputationGain,
-        timestamp: new Date(),
+  private async ensureDisputeRecord(grant: Grant, source?: SorobanGrant): Promise<void> {
+    const milestoneIdx = await this.resolveDisputedMilestoneIdx(grant, source);
+    const existing = await this.disputeRepo.findOne({
+      where: { grantId: grant.id, milestoneIdx },
+    });
+    if (existing) return;
+    try {
+      await this.disputeRepo.save(
+        this.disputeRepo.create({ grantId: grant.id, milestoneIdx, status: "open" })
+      );
+    } catch (err) {
+      // Lost a race with another writer; the unique constraint keeps one row.
+      const again = await this.disputeRepo.findOne({
+        where: { grantId: grant.id, milestoneIdx },
       });
+      if (!again) throw err;
     }
   }
 
-  private async ensureDisputeRecord(grant: Grant): Promise<void> {
-    const existing = await this.disputeRepo.findOne({
-      where: { grantId: grant.id, status: "open" },
-    });
-    if (!existing) {
-      await this.disputeRepo.save(
-        this.disputeRepo.create({ grantId: grant.id, milestoneIdx: 0, status: "open" })
-      );
+  /** First milestone of the grant that does not already have a dispute, else the first milestone. */
+  private async resolveDisputedMilestoneIdx(grant: Grant, source?: SorobanGrant): Promise<number> {
+    const indices = (source?.milestones ?? []).map((m) => m.idx).sort((a, b) => a - b);
+    if (indices.length === 0) {
+      const stored = await this.milestoneRepo.find({
+        where: { grantId: grant.id },
+        order: { idx: "ASC" },
+      });
+      indices.push(...stored.map((m) => m.idx));
     }
+    if (indices.length === 0) return 0;
+    for (const idx of indices) {
+      const taken = await this.disputeRepo.findOne({ where: { grantId: grant.id, milestoneIdx: idx } });
+      if (!taken) return idx;
+    }
+    return indices[0];
   }
 
   private normalizeGrant(grant: SorobanGrant): Partial<Grant> {

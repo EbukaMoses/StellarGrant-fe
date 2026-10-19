@@ -56,8 +56,12 @@ describe("DatePicker", () => {
   });
 
   it("shows the relative label for a future date", () => {
-    render(<DatePicker value="2027-12-31" onChange={() => {}} />);
-    // Far future from "now" — at minimum the "In … days" text renders.
+    // Derive from the wall clock so the label stays in the future regardless
+    // of when the suite runs.
+    const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10);
+    render(<DatePicker value={future} onChange={() => {}} />);
     expect(screen.getByText(/^In \d+ days$/)).toBeTruthy();
   });
 

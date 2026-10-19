@@ -116,6 +116,303 @@ mod tests {
         });
     }
 
+    mod rejection_tests {
+        extern crate std;
+
+        use super::*;
+        use crate::{events::MilestoneRejected, metrics, reviewer_reward, reviewer_sla};
+        use soroban_sdk::{events::Event, testutils::Events as _, xdr};
+
+        fn reviewers(env: &Env) -> Vec<Address> {
+            Vec::from_array(
+                env,
+                [
+                    Address::generate(env),
+                    Address::generate(env),
+                    Address::generate(env),
+                ],
+            )
+        }
+
+        fn setup<'a>(
+            env: &'a Env,
+            reviewers: &Vec<Address>,
+            token: &Address,
+        ) -> (StellarGrantsContractClient<'a>, Address) {
+            let (client, _, contract) = setup_test(env);
+            create_grant(
+                env,
+                &contract,
+                1,
+                Address::generate(env),
+                token.clone(),
+                reviewers.clone(),
+            );
+            create_milestone(env, &contract, 1, 0, MilestoneState::Submitted);
+            env.as_contract(&contract, || {
+                let mut milestone = Storage::get_milestone(env, 1, 0).unwrap();
+                milestone.reviewer_count_snapshot = reviewers.len();
+                milestone.reviewer_list_snapshot = reviewers.clone();
+                Storage::set_milestone(env, 1, 0, &milestone);
+            });
+            (client, contract)
+        }
+
+        fn event_bodies(env: &Env, contract: &Address) -> std::vec::Vec<xdr::ContractEventBody> {
+            env.events()
+                .all()
+                .filter_by_contract(contract)
+                .events()
+                .iter()
+                .map(|event| event.body.clone())
+                .collect()
+        }
+
+        fn assert_rejection_paths_match(sla_deadline: u64) {
+            let env = Env::default();
+            env.mock_all_auths();
+            env.ledger().set_timestamp(100);
+            let reviewers = reviewers(&env);
+            let token = Address::generate(&env);
+            let (vote_client, vote_contract) = setup(&env, &reviewers, &token);
+            let (reject_client, reject_contract) = setup(&env, &reviewers, &token);
+            for contract in [&vote_contract, &reject_contract] {
+                env.as_contract(contract, || {
+                    for reviewer in reviewers.iter() {
+                        reviewer_sla::register_sla(&env, &reviewer, (1, 0), sla_deadline);
+                    }
+                });
+            }
+            let reason = String::from_str(&env, "Required evidence is missing");
+            for idx in 0..2 {
+                let reviewer = reviewers.get(idx).unwrap();
+                let expected_quorum = idx == 1;
+                assert_eq!(
+                    vote_client.milestone_vote(&1, &0, &reviewer, &false, &Some(reason.clone())),
+                    expected_quorum
+                );
+                let vote_events = event_bodies(&env, &vote_contract);
+                assert_eq!(
+                    reject_client.milestone_reject(&1, &0, &reviewer, &reason),
+                    expected_quorum
+                );
+                let mut reject_events = event_bodies(&env, &reject_contract);
+
+                // The dedicated rejection API retains its original event in
+                // addition to every event emitted by the shared voting path.
+                let legacy_event = MilestoneRejected {
+                    grant_id: 1,
+                    milestone_idx: 0,
+                    reviewer: reviewer.clone(),
+                    reason: reason.clone(),
+                    timestamp: 100,
+                }
+                .to_xdr(&env, &reject_contract);
+                assert!(reject_events.contains(&legacy_event.body));
+                let xdr::ContractEventBody::V0(legacy_body) = legacy_event.body;
+                reject_events.retain(|body| {
+                    let xdr::ContractEventBody::V0(body) = body;
+                    body.topics != legacy_body.topics
+                });
+                assert_eq!(vote_events, reject_events);
+                let notification_topic =
+                    xdr::ScVal::Symbol(xdr::ScSymbol("notification".try_into().unwrap()));
+                let notifications = vote_events
+                    .iter()
+                    .filter(|body| {
+                        let xdr::ContractEventBody::V0(body) = body;
+                        body.topics.first() == Some(&notification_topic)
+                    })
+                    .count();
+                assert_eq!(notifications, usize::from(expected_quorum));
+
+                let effects = |contract: &Address| {
+                    env.as_contract(contract, || {
+                        (
+                            Storage::get_milestone(&env, 1, 0).unwrap(),
+                            audit::get_audit_log(&env, 1),
+                            metrics::get_metrics(&env),
+                        )
+                    })
+                };
+                let vote_effects = effects(&vote_contract);
+                let reject_effects = effects(&reject_contract);
+                assert_eq!(vote_effects, reject_effects);
+                assert_eq!(
+                    reject_effects.0.state,
+                    if expected_quorum {
+                        MilestoneState::Rejected
+                    } else {
+                        MilestoneState::Submitted
+                    }
+                );
+                assert_eq!(reject_effects.1.len(), u32::from(expected_quorum));
+                assert_eq!(
+                    reject_effects.2.total_milestones_rejected,
+                    u32::from(expected_quorum)
+                );
+                if expected_quorum {
+                    let entry = reject_effects.1.get(0).unwrap();
+                    assert_eq!(entry.action, AuditAction::MilestoneRejected);
+                    assert_eq!(entry.actor, reviewer);
+                    assert_eq!(entry.milestone_idx, Some(0));
+                }
+
+                let reviewer_effects = |contract: &Address| {
+                    env.as_contract(contract, || {
+                        let sla = reviewer_sla::get_sla(&env, &reviewer, (1, 0)).unwrap();
+                        (
+                            reviewer_reward::get_participation(&env, &reviewer, 1),
+                            (sla.fulfilled, sla.breached),
+                            Storage::get_reviewer_reputation(&env, reviewer.clone()),
+                        )
+                    })
+                };
+                let vote_effects = reviewer_effects(&vote_contract);
+                let reject_effects = reviewer_effects(&reject_contract);
+                assert_eq!(vote_effects, reject_effects);
+                let breached = sla_deadline < 100;
+                assert_eq!(reject_effects.1, (!breached, breached));
+                if breached {
+                    assert!(reject_effects.0.is_none());
+                } else {
+                    assert_eq!(reject_effects.0.unwrap().votes_cast, 1);
+                }
+            }
+        }
+
+        #[test]
+        fn milestone_reject_matches_vote_before_and_after_quorum() {
+            assert_rejection_paths_match(110);
+        }
+
+        #[test]
+        fn milestone_reject_matches_vote_after_sla_deadline() {
+            assert_rejection_paths_match(90);
+        }
+
+        #[test]
+        fn milestone_reject_applies_shared_vote_validation() {
+            let env = Env::default();
+            env.mock_all_auths();
+            let reviewers = reviewers(&env);
+            let (client, contract) = setup(&env, &reviewers, &Address::generate(&env));
+            let reviewer = reviewers.get(0).unwrap();
+            let outsider = Address::generate(&env);
+            let reason = String::from_str(&env, "Missing evidence");
+            assert_eq!(
+                client.try_milestone_reject(&1, &0, &outsider, &reason),
+                Err(Ok(ContractError::Unauthorized))
+            );
+            // Adding a live reviewer must not bypass the submission snapshot.
+            env.as_contract(&contract, || {
+                let mut grant = Storage::get_grant(&env, 1).unwrap();
+                grant.reviewers.push_back(outsider.clone());
+                Storage::set_grant(&env, 1, &grant);
+            });
+            assert_eq!(
+                client.try_milestone_reject(&1, &0, &outsider, &reason),
+                Err(Ok(ContractError::Unauthorized))
+            );
+            let oversized = String::from_str(
+                &env,
+                &"x".repeat(crate::constants::MAX_BIO_LEN as usize + 1),
+            );
+            assert_eq!(
+                client.try_milestone_reject(&1, &0, &reviewer, &oversized),
+                Err(Ok(ContractError::InvalidInput))
+            );
+            assert!(!client.milestone_reject(&1, &0, &reviewer, &reason));
+            assert_eq!(
+                client.try_milestone_reject(&1, &0, &reviewer, &reason),
+                Err(Ok(ContractError::AlreadyVoted))
+            );
+            env.as_contract(&contract, || {
+                let mut grant = Storage::get_grant(&env, 1).unwrap();
+                grant.status = GrantStatus::Cancelled;
+                Storage::set_grant(&env, 1, &grant);
+            });
+            assert_eq!(
+                client.try_milestone_reject(&1, &0, &reviewers.get(1).unwrap(), &reason),
+                Err(Ok(ContractError::InvalidState))
+            );
+            env.as_contract(&contract, || {
+                assert_eq!(
+                    reviewer_reward::get_participation(&env, &reviewer, 1)
+                        .unwrap()
+                        .votes_cast,
+                    1
+                );
+                assert_eq!(Storage::get_milestone(&env, 1, 0).unwrap().votes.len(), 1);
+                assert_eq!(metrics::get_metrics(&env).total_milestones_rejected, 0);
+            });
+        }
+
+        #[test]
+        fn milestone_reject_requires_a_submitted_milestone() {
+            let env = Env::default();
+            env.mock_all_auths();
+            let reviewers = reviewers(&env);
+            let (client, contract) = setup(&env, &reviewers, &Address::generate(&env));
+            create_milestone(&env, &contract, 1, 0, MilestoneState::Pending);
+            assert_eq!(
+                client.try_milestone_reject(
+                    &1,
+                    &0,
+                    &reviewers.get(0).unwrap(),
+                    &String::from_str(&env, "Missing evidence")
+                ),
+                Err(Ok(ContractError::MilestoneNotSubmitted))
+            );
+        }
+
+        #[test]
+        fn milestone_reject_preserves_pause_and_circuit_breaker_guards() {
+            for guard in 0..3 {
+                let env = Env::default();
+                env.mock_all_auths();
+                let reviewers = reviewers(&env);
+                let (client, contract) = setup(&env, &reviewers, &Address::generate(&env));
+                env.as_contract(&contract, || match guard {
+                    0 => Storage::set_is_paused(&env, true),
+                    1 => {
+                        let owner = Storage::get_grant(&env, 1).unwrap().owner;
+                        crate::grant_pause::pause(
+                            &env,
+                            &owner,
+                            1,
+                            String::from_str(&env, "Paused"),
+                            None,
+                        )
+                        .unwrap();
+                    }
+                    _ => crate::circuit_breaker::trip_internal(
+                        &env,
+                        &reviewers.get(0).unwrap(),
+                        crate::types::ProtocolModule::Grants,
+                        String::from_str(&env, "Paused"),
+                        None,
+                    )
+                    .unwrap(),
+                });
+                let expected = if guard == 2 {
+                    ContractError::ModuleTripped
+                } else {
+                    ContractError::ContractPaused
+                };
+                assert_eq!(
+                    client.try_milestone_reject(
+                        &1,
+                        &0,
+                        &reviewers.get(0).unwrap(),
+                        &String::from_str(&env, "Missing evidence")
+                    ),
+                    Err(Ok(expected))
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_get_milestone_success() {
         let env = Env::default();

@@ -1,12 +1,25 @@
-import { Column, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryColumn, UpdateDateColumn, ManyToMany, JoinTable } from "typeorm";
+import {
+  Column,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+  ManyToMany,
+  JoinTable,
+} from "typeorm";
 import { MilestoneProof } from "./MilestoneProof";
 import { Milestone } from "./Milestone";
 import { Community } from "./Community";
 import { GrantReviewer } from "./GrantReviewer";
 
 @Entity({ name: "grants" })
+@Index("IDX_grant_community_id", ["communityId"])
+@Index("IDX_grant_updated_at_id", ["updatedAt", "id"])
 export class Grant {
-  @PrimaryColumn({ type: "int" })
+  @PrimaryGeneratedColumn("increment")
   id!: number;
 
   @Column({ type: "varchar", length: 200 })
@@ -18,8 +31,8 @@ export class Grant {
   @Column({ type: "varchar", length: 30 })
   status!: string;
 
-  @Column({ type: "varchar", length: 120, nullable: true })
-  owner?: string | null;
+  @Column({ type: "varchar", length: 120 })
+  owner!: string;
 
   @Column({ type: "varchar", length: 120 })
   recipient!: string;
@@ -27,7 +40,9 @@ export class Grant {
   @Column({ type: "int", nullable: true })
   communityId?: number | null;
 
-  @ManyToOne(() => Community, (community) => community.grants, { nullable: true })
+  @ManyToOne(() => Community, (community) => community.grants, {
+    nullable: true,
+  })
   @JoinColumn({ name: "communityId" })
   community?: Community;
 

@@ -3,9 +3,10 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  Index,
 } from "typeorm";
 
-@Entity()
+@Entity({ name: "rate_limit_logs" })
 export class RateLimitLog {
   @PrimaryGeneratedColumn()
   id!: number;
@@ -25,6 +26,9 @@ export class RateLimitLog {
   @Column({ type: "varchar", length: 120, nullable: true })
   address!: string | null;
 
+  
+  @Index("IDX_rate_limit_created_at", ["createdAt"])
   @CreateDateColumn()
   createdAt!: Date;
+
 }

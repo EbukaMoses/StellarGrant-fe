@@ -30,15 +30,19 @@ const page2Address = page2Entries[7].address;
 const fetchMock = vi.fn();
 
 function okPageResponse(pageNumber: number) {
-  const entries = pageNumber === 1 ? page1Entries : page2Entries;
+  const entries = pageNumber === 1 ? page1Entries : pageNumber === 2 ? page2Entries : [];
   return {
     ok: true,
     json: async () => ({ entries, total: 50, page: pageNumber }),
   };
 }
 
-function pageFromUrl(url: unknown): number {
-  const parsed = new URL(String(url));
+function pageFromUrl(input: unknown): number {
+  const urlStr =
+    typeof input === "object" && input !== null && "url" in input
+      ? (input as { url: string }).url
+      : String(input);
+  const parsed = new URL(urlStr, "http://localhost");
   return Number(parsed.searchParams.get("page") ?? "1");
 }
 

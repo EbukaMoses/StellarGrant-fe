@@ -5,7 +5,7 @@
  * window — ensure popups are not blocked for your site.
  */
 
-import { FeeBumpTransaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+import { FeeBumpTransaction, Keypair, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import type { WalletAdapter } from "./types";
 
 export function verifySignedTransactionMatchesOriginal(
@@ -42,19 +42,50 @@ export function verifySignedTransactionMatchesOriginal(
   }
 }
 
+/**
+ * Throws unless the signed envelope carries a valid signature from
+ * `expectedPublicKey`. Albedo opens a fresh popup per request, so the account
+ * that signs can differ from the one the app authorized earlier.
+ */
+export function verifySignedByExpectedAccount(
+  signedTxXdr: string,
+  networkPassphrase: string,
+  expectedPublicKey: string,
+): void {
+  let tx;
+  try {
+    tx = TransactionBuilder.fromXDR(signedTxXdr, networkPassphrase);
+  } catch (error) {
+    throw new Error(`Invalid signed transaction XDR: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const keypair = Keypair.fromPublicKey(expectedPublicKey);
+  const hash = tx.hash();
+  const signedByExpected = tx.signatures.some(
+    (sig) =>
+      sig.hint().equals(keypair.signatureHint()) &&
+      keypair.verify(hash, sig.signature()),
+  );
+  if (!signedByExpected) {
+    throw new Error(
+      `Albedo signed with a different account than the one authorized (${expectedPublicKey}). Transaction rejected.`,
+    );
+  }
+}
+
 type AlbedoNetwork = "testnet" | "public";
 
 /** Minimal shape of the window.albedo global injected by Albedo. */
 interface AlbedoGlobal {
   publicKey(params: Record<string, never>): Promise<{ pubkey?: string }>;
-  tx(params: { xdr: string; network: AlbedoNetwork }): Promise<{ signed_envelope_xdr?: string }>;
+  tx(params: { xdr: string; network: AlbedoNetwork; pubkey?: string }): Promise<{ signed_envelope_xdr?: string }>;
 }
 
 export class AlbedoAdapter implements WalletAdapter {
   readonly name = "Albedo";
   readonly icon = "https://albedo.link/img/albedo-logo.svg";
 
-  private publicKeyCache: string | null = null;
+  /** Account most recently authorized via getPublicKey(); never served from cache. */
+  private authorizedPublicKey: string | null = null;
   private readonly network: AlbedoNetwork;
 
   constructor(networkPassphrase?: string) {
@@ -69,8 +100,6 @@ export class AlbedoAdapter implements WalletAdapter {
   }
 
   async getPublicKey(): Promise<string> {
-    if (this.publicKeyCache) return this.publicKeyCache;
-
     const albedo = (window as Window & { albedo?: AlbedoGlobal }).albedo;
     if (!albedo) throw new Error("Albedo is not installed or available");
 
@@ -81,7 +110,7 @@ export class AlbedoAdapter implements WalletAdapter {
       throw new Error("Albedo did not return a public key.");
     }
 
-    this.publicKeyCache = response.pubkey;
+    this.authorizedPublicKey = response.pubkey;
     return response.pubkey;
   }
 
@@ -89,9 +118,14 @@ export class AlbedoAdapter implements WalletAdapter {
     const albedo = (window as Window & { albedo?: AlbedoGlobal }).albedo;
     if (!albedo) throw new Error("Albedo is not installed or available");
 
+    const authorized = this.authorizedPublicKey;
+    if (!authorized) {
+      throw new Error("No Albedo account authorized. Connect the wallet before signing.");
+    }
+
     const network = this.resolveNetwork(networkPassphrase || this.network);
     const response = await this.withPopupGuard<{ signed_envelope_xdr?: string }>(() =>
-      albedo.tx({ xdr: txXdr, network }),
+      albedo.tx({ xdr: txXdr, network, pubkey: authorized }),
     );
 
     if (!response?.signed_envelope_xdr) {
@@ -103,6 +137,7 @@ export class AlbedoAdapter implements WalletAdapter {
       response.signed_envelope_xdr,
       networkPassphrase,
     );
+    verifySignedByExpectedAccount(response.signed_envelope_xdr, networkPassphrase, authorized);
 
     return response.signed_envelope_xdr;
   }

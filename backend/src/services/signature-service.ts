@@ -50,6 +50,27 @@ export type MilestoneApprovalIntent = {
 };
 
 export class SignatureService {
+  buildUserIntentMessage(payload: Omit<UserIntent, "signature">): string {
+    return [
+      "stellargrant:user:v1",
+      payload.address,
+      payload.nonce,
+      payload.timestamp,
+      payload.action,
+    ].join("|");
+  }
+
+  verifyUser(payload: UserIntent): boolean {
+    if (!StrKey.isValidEd25519PublicKey(payload.address)) {
+      return false;
+    }
+    const keypair = Keypair.fromPublicKey(payload.address);
+    return keypair.verify(
+      Buffer.from(this.buildUserIntentMessage(payload), "utf8"),
+      Buffer.from(payload.signature, "base64"),
+    );
+  }
+
   buildIntentMessage(payload: Omit<MilestoneProofIntent, "signature">): string {
     return [
       "stellargrant:milestone_proof:v1",
@@ -72,7 +93,9 @@ export class SignatureService {
     ].join("|");
   }
 
-  buildFeedbackIntentMessage(payload: Omit<FeedbackIntent, "signature">): string {
+  buildFeedbackIntentMessage(
+    payload: Omit<FeedbackIntent, "signature">,
+  ): string {
     return [
       "stellargrant:feedback:v1",
       payload.grantId,
@@ -84,7 +107,9 @@ export class SignatureService {
     ].join("|");
   }
 
-  buildAddReviewerIntentMessage(payload: Omit<AddReviewerIntent, "signature">): string {
+  buildAddReviewerIntentMessage(
+    payload: Omit<AddReviewerIntent, "signature">,
+  ): string {
     return [
       "stellargrant:add_reviewer:v1",
       payload.grantId,
@@ -177,6 +202,31 @@ export class SignatureService {
     const keypair = Keypair.fromPublicKey(payload.address);
     const message = this.buildAdminIntentMessage(payload);
 
+    return keypair.verify(
+      Buffer.from(message, "utf8"),
+      Buffer.from(payload.signature, "base64"),
+    );
+  }
+
+  buildDisputeResolveIntentMessage(
+    payload: Omit<DisputeResolveIntent, "signature">,
+  ): string {
+    return [
+      "stellargrant:dispute_resolve:v1",
+      payload.disputeId,
+      payload.approvePayout.toString(),
+      payload.resolverAddress,
+      payload.nonce,
+      payload.timestamp,
+    ].join("|");
+  }
+
+  verifyDisputeResolve(payload: DisputeResolveIntent): boolean {
+    if (!StrKey.isValidEd25519PublicKey(payload.resolverAddress)) {
+      return false;
+    }
+    const keypair = Keypair.fromPublicKey(payload.resolverAddress);
+    const message = this.buildDisputeResolveIntentMessage(payload);
     return keypair.verify(
       Buffer.from(message, "utf8"),
       Buffer.from(payload.signature, "base64"),

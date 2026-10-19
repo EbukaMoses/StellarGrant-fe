@@ -1,7 +1,14 @@
-import { Repository, DataSource } from "typeorm";
-import { WebhookSubscription, WebhookEventType } from "../entities/WebhookSubscription";
-import { WebhookDeliveryLog, WebhookDeliveryStatus } from "../entities/WebhookDeliveryLog";
+import { Repository, DataSource, LessThanOrEqual } from "typeorm";
+import {
+  WebhookSubscription,
+  WebhookEventType,
+} from "../entities/WebhookSubscription";
+import {
+  WebhookDeliveryLog,
+  WebhookDeliveryStatus,
+} from "../entities/WebhookDeliveryLog";
 import { createHmac } from "node:crypto";
+import { assertSafeWebhookUrl } from "../utils/ssrf-guard";
 
 /**
  * Webhook event payload structure
@@ -16,11 +23,11 @@ export interface WebhookPayload {
  * Retry configuration with exponential backoff
  */
 const RETRY_DELAYS_MS = [
-  5000,    // 5 seconds
-  15000,   // 15 seconds
-  60000,   // 1 minute
-  300000,  // 5 minutes
-  900000,  // 15 minutes
+  5000, // 5 seconds
+  15000, // 15 seconds
+  60000, // 1 minute
+  300000, // 5 minutes
+  900000, // 15 minutes
 ];
 
 export class WebhookDispatcher {
@@ -45,11 +52,17 @@ export class WebhookDispatcher {
   /**
    * Verify webhook signature
    */
-  static verifySignature(payload: WebhookPayload, secret: string, signature: string): boolean {
+  static verifySignature(
+    payload: WebhookPayload,
+    secret: string,
+    signature: string,
+  ): boolean {
     try {
-      return createHmac("sha256", secret)
-        .update(JSON.stringify(payload))
-        .digest("hex") === signature;
+      return (
+        createHmac("sha256", secret)
+          .update(JSON.stringify(payload))
+          .digest("hex") === signature
+      );
     } catch {
       return false;
     }
@@ -58,14 +71,19 @@ export class WebhookDispatcher {
   /**
    * Dispatch an event to all matching webhook subscriptions
    */
-  async dispatch(event: WebhookEventType, data: Record<string, any>): Promise<void> {
+  async dispatch(
+    event: WebhookEventType,
+    data: Record<string, any>,
+  ): Promise<void> {
     const subscriptions = await this.subscriptionRepo.find({
       where: { isActive: true },
     });
 
     // Filter subscriptions that are interested in this event
-    const matching = subscriptions.filter((subscription: WebhookSubscription) =>
-      subscription.events.includes(event) || subscription.events.includes(WebhookEventType.ALL),
+    const matching = subscriptions.filter(
+      (subscription: WebhookSubscription) =>
+        subscription.events.includes(event) ||
+        subscription.events.includes(WebhookEventType.ALL),
     );
 
     if (matching.length === 0) {
@@ -80,7 +98,10 @@ export class WebhookDispatcher {
 
     const deliveryPromises = matching.map((subscription: WebhookSubscription) =>
       this.deliver(subscription, payload).catch((err: any) => {
-        console.error(`Webhook delivery failed for subscription ${subscription.id}:`, err);
+        console.error(
+          `Webhook delivery failed for subscription ${subscription.id}:`,
+          err,
+        );
       }),
     );
 
@@ -94,7 +115,10 @@ export class WebhookDispatcher {
     subscription: WebhookSubscription,
     payload: WebhookPayload,
   ): Promise<WebhookDeliveryLog> {
-    const signature = WebhookDispatcher.signPayload(payload, subscription.secretKey);
+    const signature = WebhookDispatcher.signPayload(
+      payload,
+      subscription.secretKey,
+    );
 
     const log = this.deliveryLogRepo.create({
       subscriptionId: subscription.id,
@@ -123,6 +147,12 @@ export class WebhookDispatcher {
     log.attemptCount += 1;
 
     try {
+      // SSRF guard — re-validate the stored URL before every outbound request.
+      // This catches subscriptions that may have slipped in before the guard
+      // was introduced, or whose target domain was re-delegated to an internal
+      // address after creation.
+      await assertSafeWebhookUrl(subscription.targetUrl);
+
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
 
@@ -161,7 +191,8 @@ export class WebhookDispatcher {
       }
     } catch (error) {
       log.status = WebhookDeliveryStatus.FAILED;
-      log.errorMessage = error instanceof Error ? error.message : "Network error";
+      log.errorMessage =
+        error instanceof Error ? error.message : "Network error";
       await this.scheduleRetry(log, subscription);
     }
 
@@ -175,7 +206,10 @@ export class WebhookDispatcher {
     log: WebhookDeliveryLog,
     subscription: WebhookSubscription,
   ): Promise<void> {
-    if (log.attemptCount >= Math.min(subscription.maxRetries, RETRY_DELAYS_MS.length)) {
+    if (
+      log.attemptCount >=
+      Math.min(subscription.maxRetries, RETRY_DELAYS_MS.length)
+    ) {
       log.status = WebhookDeliveryStatus.EXHAUSTED;
 
       // Track consecutive failures on subscription
@@ -190,7 +224,8 @@ export class WebhookDispatcher {
       return;
     }
 
-    const delay = RETRY_DELAYS_MS[log.attemptCount - 1] ?? RETRY_DELAYS_MS.at(-1)!;
+    const delay =
+      RETRY_DELAYS_MS[log.attemptCount - 1] ?? RETRY_DELAYS_MS.at(-1)!;
     log.nextRetryAt = new Date(Date.now() + delay).toISOString();
     log.status = WebhookDeliveryStatus.RETRYING;
   }
@@ -225,7 +260,7 @@ export class WebhookDispatcher {
     const pendingRetries = await this.deliveryLogRepo.find({
       where: {
         status: WebhookDeliveryStatus.RETRYING,
-        nextRetryAt: { $lte: new Date().toISOString() } as any,
+        nextRetryAt: LessThanOrEqual(new Date().toISOString()),
       },
       relations: ["subscription"],
       take: 50, // Batch size
@@ -239,7 +274,10 @@ export class WebhookDispatcher {
       }
 
       const payload: WebhookPayload = log.payload as WebhookPayload;
-      const signature = WebhookDispatcher.signPayload(payload, log.subscription.secretKey);
+      const signature = WebhookDispatcher.signPayload(
+        payload,
+        log.subscription.secretKey,
+      );
 
       try {
         await this.attemptDelivery(log, log.subscription, payload, signature);

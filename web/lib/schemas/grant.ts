@@ -1,4 +1,17 @@
 import { z } from "zod";
+import { StrKey } from "@stellar/stellar-sdk";
+
+/**
+ * Checksum-validated Stellar public key.
+ *
+ * A plain `/^G[A-Z2-7]{55}$/` regex accepts any base32 string of the right
+ * length; `StrKey` also verifies the CRC16 checksum, so mistyped recipient or
+ * reviewer addresses are rejected at form level rather than at transaction
+ * build/sign time — or never, for a reviewer who is never asked to sign.
+ */
+const stellarAddress = z
+  .string()
+  .refine((value) => StrKey.isValidEd25519PublicKey(value), "Invalid Stellar address");
 
 export const step1Schema = z.object({
   title: z.string()
@@ -7,7 +20,7 @@ export const step1Schema = z.object({
   description: z.string()
     .min(50, "Description must be at least 50 characters")
     .max(5000, "Description must be at most 5000 characters"),
-  recipientAddress: z.string().regex(/^G[A-Z2-7]{55}$/, "Invalid Stellar address"),
+  recipientAddress: stellarAddress,
   totalBudget: z.number({ message: "Budget must be a number" })
     .positive("Budget must be greater than 0")
     .max(10000000, "Budget cannot exceed 10,000,000"),
@@ -35,9 +48,7 @@ export const step2Schema = z.object({
 });
 
 export const step3Schema = z.object({
-  reviewers: z.array(
-    z.string().regex(/^G[A-Z2-7]{55}$/, "Invalid Stellar address")
-  )
+  reviewers: z.array(stellarAddress)
   .min(3, "Minimum 3 reviewers required")
   .max(7, "Maximum 7 reviewers")
   .refine(

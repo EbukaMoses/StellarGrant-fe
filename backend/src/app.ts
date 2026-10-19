@@ -19,6 +19,7 @@ import { buildCommunitiesRouter } from "./routes/communities";
 import { buildNotificationsRouter } from "./routes/notifications";
 import { buildAdminRouter } from "./routes/admin";
 import { buildAdminMiddleware } from "./middlewares/admin-middleware";
+import { buildSignedUserAuth } from "./middlewares/signed-user-auth";
 import { GrantSyncService } from "./services/grant-sync-service";
 import { SignatureService } from "./services/signature-service";
 import { LeaderboardService } from "./services/leaderboard-service";
@@ -29,6 +30,7 @@ import { env } from "./config/env";
 import { ReconciliationService } from "./services/reconciliation-service";
 import { SorobanContractClient } from "./soroban/types";
 import { AppError } from "./utils/errors";
+import { errorHandler } from "./middlewares/error-handler";
 
 import { User } from "./entities/User";
 import { Role } from "./entities/Role";
@@ -47,14 +49,31 @@ import { UsedNonce } from "./entities/UsedNonce";
 import { buildMilestoneApprovalNotifyRouter } from "./routes/milestone-approvals-notify";
 import { buildMilestoneApprovalRouter } from "./routes/milestone-approvals";
 import { buildMilestoneCommentsRouter } from "./routes/milestone-comments";
-import { buildDisputesRouter, buildGrantDisputesRouter } from "./routes/disputes";
+import {
+  buildDisputesRouter,
+  buildGrantDisputesRouter,
+} from "./routes/disputes";
 import { buildMilestoneAppealsRouter } from "./routes/milestone-appeals";
 import { buildGrantDraftsRouter } from "./routes/grant-drafts";
 import { buildContributorsRouter } from "./routes/contributors";
 import { buildIpfsPresignRouter } from "./routes/ipfs-presign";
 import { buildEventsRouter } from "./routes/events";
+import { buildRolesRouter } from "./routes/roles";
+import { buildAnalyticsRouter } from "./routes/analytics";
+import { buildActivityRouter } from "./routes/activity";
+import { buildDashboardRouter } from "./routes/dashboard";
+import { buildProfileRouter } from "./routes/profile";
+import { buildProofsRouter } from "./routes/proofs";
+import { buildStatsRouter } from "./routes/stats";
+import { buildWatchlistRouter } from "./routes/watchlist";
+import { GrantView } from "./entities/GrantView";
+import { UserWatchlist } from "./entities/UserWatchlist";
+import { IpfsService } from "./services/ipfs-service";
 
-export const createApp = (dataSource: DataSource, sorobanClient: SorobanContractClient) => {
+export const createApp = (
+  dataSource: DataSource,
+  sorobanClient: SorobanContractClient,
+) => {
   const app = express();
   app.use(helmet());
   app.use(
@@ -86,6 +105,8 @@ export const createApp = (dataSource: DataSource, sorobanClient: SorobanContract
   const milestoneRepo = dataSource.getRepository(Milestone);
   const commentsRepo = dataSource.getRepository(MilestoneComment);
   const feedbackRepo = dataSource.getRepository(GrantFeedback);
+  const grantViewRepo = dataSource.getRepository(GrantView);
+  const watchlistRepo = dataSource.getRepository(UserWatchlist);
 
   const grantSyncService = new GrantSyncService(dataSource, sorobanClient);
   const signatureService = new SignatureService();
@@ -93,8 +114,18 @@ export const createApp = (dataSource: DataSource, sorobanClient: SorobanContract
   const leaderboardService = new LeaderboardService(dataSource);
   const responseCacheService = new ResponseCacheService();
   const rbacService = new RbacService(userRepo, roleRepo, userRoleRepo);
-  const adminMiddleware = buildAdminMiddleware(signatureService);
-  const reconciliationService = new ReconciliationService(dataSource, sorobanClient, grantSyncService);
+  const signedUserAuth = buildSignedUserAuth(signatureService, nonceService);
+  const optionalSignedUserAuth = buildSignedUserAuth(
+    signatureService,
+    nonceService,
+    { optional: true },
+  );
+  const adminMiddleware = buildAdminMiddleware(signatureService, nonceService);
+  const reconciliationService = new ReconciliationService(
+    dataSource,
+    sorobanClient,
+    grantSyncService,
+  );
   const webhookDispatcher = new WebhookDispatcher(dataSource);
 
   app.get("/health", (_req, res) => res.json({ ok: true }));
@@ -111,17 +142,57 @@ export const createApp = (dataSource: DataSource, sorobanClient: SorobanContract
       nonceService,
     ),
   );
-  app.use("/grants", buildGrantDraftsRouter(dataSource, webhookDispatcher));
-  app.use("/milestone_proof", buildMilestoneProofRouter(proofRepo, signatureService, grantRepo, userRepo, nonceService));
+  app.use(
+    "/grants",
+    buildGrantDraftsRouter(dataSource, webhookDispatcher, signedUserAuth),
+  );
+  app.use(
+    "/milestone_proof",
+    buildMilestoneProofRouter(
+      proofRepo,
+      signatureService,
+      grantRepo,
+      userRepo,
+      nonceService,
+    ),
+  );
   app.use("/search", buildSearchRouter(dataSource));
   app.use("/leaderboard", buildLeaderboardRouter(leaderboardService));
   app.use("/profiles", buildProfilesRouter(contributorRepo, grantRepo));
-  app.use("/my-donations", buildMyDonationsRouter(dataSource));
-  app.use("/communities", buildCommunitiesRouter(communityRepo, grantRepo, activityRepo, rbacService, webhookDispatcher));
+  app.use("/my-donations", buildMyDonationsRouter(dataSource, signedUserAuth));
+  app.use(
+    "/communities",
+    optionalSignedUserAuth,
+    buildCommunitiesRouter(
+      communityRepo,
+      grantRepo,
+      activityRepo,
+      rbacService,
+      webhookDispatcher,
+    ),
+  );
   app.use("/notifications", buildNotificationsRouter(contributorRepo));
-  app.use("/contributors", buildContributorsRouter(contributorRepo, grantRepo, proofRepo, activityRepo));
+  app.use(
+    "/contributors",
+    buildContributorsRouter(
+      contributorRepo,
+      grantRepo,
+      proofRepo,
+      activityRepo,
+    ),
+  );
   app.use("/ipfs", buildIpfsPresignRouter());
   app.use("/events", buildEventsRouter(activityRepo));
+  app.use(
+    "/webhooks",
+    buildWebhooksRouter(
+      userRepo,
+      webhookSubscriptionRepo,
+      webhookDispatcher,
+      rbacService,
+      signedUserAuth,
+    ),
+  );
   app.use("/users", buildUserRouter(userRepo));
   app.use("/grant_reviewers", buildGrantReviewerRouter(reviewerRepo, signatureService, grantRepo, nonceService));
   app.use(
@@ -142,26 +213,50 @@ export const createApp = (dataSource: DataSource, sorobanClient: SorobanContract
   );
   app.use("/disputes", buildDisputesRouter(dataSource, rbacService, webhookDispatcher));
   app.use("/", buildGrantDisputesRouter(dataSource));
-  app.use("/", buildMilestoneAppealsRouter(dataSource, webhookDispatcher, notificationService));
-  app.use("/", buildMilestoneCommentsRouter(milestoneRepo, commentsRepo, reviewerRepo));
+  app.use(
+    "/",
+    buildMilestoneAppealsRouter(
+      dataSource,
+      webhookDispatcher,
+      notificationService,
+    ),
+  );
+  app.use(
+    "/",
+    buildMilestoneCommentsRouter(
+      milestoneRepo,
+      commentsRepo,
+      reviewerRepo,
+      adminMiddleware,
+    ),
+  );
   app.get("/metrics", async (req, res, next) => {
     try {
-      if (env.metricsAllowedIps.length > 0 && !env.metricsAllowedIps.includes(req.ip)) {
+      if (
+        env.metricsAllowedIps.length > 0 &&
+        !env.metricsAllowedIps.includes(req.ip)
+      ) {
         res.status(403).json({ error: "Forbidden" });
         return;
       }
 
       const auth = String(req.header("authorization") ?? "");
       if (!auth.startsWith("Basic ")) {
-        res.set("WWW-Authenticate", "Basic realm=\"metrics\"");
+        res.set("WWW-Authenticate", 'Basic realm="metrics"');
         res.status(401).json({ error: "Missing authorization" });
         return;
       }
 
-      const decoded = Buffer.from(auth.replace(/^Basic\s+/i, ""), "base64").toString("utf8");
+      const decoded = Buffer.from(
+        auth.replace(/^Basic\s+/i, ""),
+        "base64",
+      ).toString("utf8");
       const [user, pass] = decoded.split(":", 2);
-      if (user !== env.metricsBasicAuthUser || pass !== env.metricsBasicAuthPassword) {
-        res.set("WWW-Authenticate", "Basic realm=\"metrics\"");
+      if (
+        user !== env.metricsBasicAuthUser ||
+        pass !== env.metricsBasicAuthPassword
+      ) {
+        res.set("WWW-Authenticate", 'Basic realm="metrics"');
         res.status(401).json({ error: "Invalid credentials" });
         return;
       }
@@ -173,16 +268,34 @@ export const createApp = (dataSource: DataSource, sorobanClient: SorobanContract
       next(error);
     }
   });
-  app.use("/admin", adminMiddleware, buildAdminRouter(grantSyncService, contributorRepo, auditLogRepo, responseCacheService, reconciliationService));
+  app.use(
+    "/admin",
+    adminMiddleware,
+    buildAdminRouter(
+      grantSyncService,
+      contributorRepo,
+      auditLogRepo,
+      responseCacheService,
+      reconciliationService,
+    ),
+  );
 
-  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    if (err instanceof AppError) {
-      res.status(err.statusCode).json(err.toJSON());
-      return;
-    }
-    const message = err instanceof Error ? err.message : "Internal server error";
-    res.status(500).json({ error: message });
-  });
+  app.use(
+    (
+      err: unknown,
+      _req: express.Request,
+      res: express.Response,
+      _next: express.NextFunction,
+    ) => {
+      if (err instanceof AppError) {
+        res.status(err.statusCode).json(err.toJSON());
+        return;
+      }
+      const message =
+        err instanceof Error ? err.message : "Internal server error";
+      res.status(500).json({ error: message });
+    },
+  );
 
   return app;
 };

@@ -66,7 +66,10 @@ export async function GET(request: NextRequest): Promise<Response> {
         }
 
         try {
-          const events: ContractEvent[] = await fetchContractEvents(grantId);
+          const events: ContractEvent[] = await fetchContractEvents(
+            grantId,
+            lastLedger > 0 ? { startLedger: lastLedger + 1 } : {},
+          );
 
           // Only forward events newer than the last seen ledger.
           const newEvents = events.filter((e) => e.ledger > lastLedger);

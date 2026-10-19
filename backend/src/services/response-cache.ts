@@ -41,6 +41,15 @@ export class ResponseCacheService {
     this.memoryCache.delete(key);
   }
 
+  /** Drops the cached stats and every first-page grants listing (all languages). */
+  async invalidateGrantsAndStats(): Promise<void> {
+    this.memoryCache.delete(responseCacheKeys.stats());
+    const grantsPrefix = responseCacheKeys.grantsFirstPage("");
+    for (const key of [...this.memoryCache.keys()]) {
+      if (key.startsWith(grantsPrefix)) this.memoryCache.delete(key);
+    }
+  }
+
   async flush(): Promise<void> {
     this.memoryCache.clear();
   }

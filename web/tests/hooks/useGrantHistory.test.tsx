@@ -121,4 +121,45 @@ describe("useGrantHistory", () => {
       expect(screen.getByText("grant_cancel")).toBeTruthy();
     });
   });
+
+  it("rapidly changing grantId never results in stale history data overwriting fresh data", async () => {
+    let resolveGrant1!: (val: unknown) => void;
+    const delayedPromise1 = new Promise((resolve) => {
+      resolveGrant1 = resolve;
+    });
+
+    mockGetGrantHistory.mockImplementation((id: number | bigint) => {
+      if (id === 1) {
+        return delayedPromise1;
+      }
+      if (id === 2) {
+        return Promise.resolve({
+          records: [makeRecord({ txHash: "tx-grant-2", grantId: "2", operationType: "grant_cancel" })],
+          nextCursor: undefined,
+        });
+      }
+      return Promise.resolve({ records: [], nextCursor: undefined });
+    });
+
+    const { rerender } = render(<HookProbe grantId="1" />);
+
+    // Switch rapidly to grant 2
+    rerender(<HookProbe grantId="2" />);
+
+    // Grant 2 resolves immediately
+    await waitFor(() => {
+      expect(screen.getByText("grant_cancel")).toBeTruthy();
+    });
+
+    // Grant 1's slow response resolves late
+    resolveGrant1({
+      records: [makeRecord({ txHash: "tx-grant-1", grantId: "1", operationType: "grant_fund" })],
+      nextCursor: undefined,
+    });
+
+    // Wait a tick and verify grant 1 records never stomped grant 2 records
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText("grant_fund")).toBeNull();
+    expect(screen.getByText("grant_cancel")).toBeTruthy();
+  });
 });

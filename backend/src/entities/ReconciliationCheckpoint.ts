@@ -1,4 +1,10 @@
-import { Column, Entity, PrimaryColumn, UpdateDateColumn } from "typeorm";
+import {
+  Column,
+  Entity,
+  PrimaryColumn,
+  UpdateDateColumn,
+  ValueTransformer,
+} from "typeorm";
 
 /**
  * Persists the last successfully processed ledger sequence for the
@@ -11,7 +17,8 @@ export class ReconciliationCheckpoint {
     name!: string;
 
     /** Last ledger sequence that was fully reconciled */
-    @Column({ type: "bigint" })
+    /** Value transformer to convert bigint string to number on read */
+    @Column({ type: "bigint", transformer: { from: (v: string | number) => (typeof v === "string" ? Number(v) : v), to: (v: number) => String(v) } })
     lastLedger!: number;
 
     @UpdateDateColumn()

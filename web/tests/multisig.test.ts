@@ -18,11 +18,13 @@ import {
 
 vi.mock("../lib/stellar/client", () => ({
   getRpcClient: vi.fn(),
+  getHorizonClient: vi.fn(),
   networkPassphraseConfig: "Test SDF Network ; September 2015",
 }));
 
-import { getRpcClient, networkPassphraseConfig } from "../lib/stellar/client";
+import { getHorizonClient, getRpcClient, networkPassphraseConfig } from "../lib/stellar/client";
 import {
+  fetchMultiSigConfig,
   buildUnsignedTransaction,
   combineSignatures,
   isValidTransactionXdr,
@@ -65,7 +67,7 @@ describe("buildUnsignedTransaction", () => {
 
     vi.mocked(getRpcClient).mockReturnValue({
       getAccount: vi.fn().mockResolvedValue(account),
-    } as ReturnType<typeof getRpcClient>);
+    } as unknown as ReturnType<typeof getRpcClient>);
 
     const originalTx = new TransactionBuilder(account, {
       fee: BASE_FEE.toString(),
@@ -222,7 +224,7 @@ describe("MultiSigTracker", () => {
   });
 
   it("buildCombinedXdr throws when not ready", () => {
-    expect(() => tracker.buildCombinedXdr()).toThrow(/Not enough signatures/);
+    expect(() => tracker.buildCombinedXdr()).toThrow(/Not enough signature weight/);
   });
 
   it("throws if requiredSignatures < 1", () => {
@@ -232,7 +234,7 @@ describe("MultiSigTracker", () => {
         requiredSignatures: 0,
         signerPublicKeys: [SIGNER_A],
       })
-    ).toThrow(/requiredSignatures must be at least 1/);
+    ).toThrow(/requiredWeight must be at least 1/);
   });
 
   it("throws if signerPublicKeys fewer than requiredSignatures", () => {
@@ -242,7 +244,7 @@ describe("MultiSigTracker", () => {
         requiredSignatures: 3,
         signerPublicKeys: [SIGNER_A, SIGNER_B],
       })
-    ).toThrow(/signerPublicKeys must contain at least/);
+    ).toThrow(/Combined signer weight must be at least/);
   });
 
   it("snapshot is a deep copy, not the internal reference", () => {
@@ -252,5 +254,83 @@ describe("MultiSigTracker", () => {
     // snap1 should not have changed
     expect(snap1.collectedCount).toBe(0);
     expect(snap2.collectedCount).toBe(1);
+  });
+});
+
+// ── Weighted thresholds (#1282) ───────────────────────────────────────────
+
+describe("MultiSigTracker weighted threshold", () => {
+  const weighted = () =>
+    new MultiSigTracker({
+      unsignedXdr: fakeXdr(0),
+      signers: [
+        { publicKey: SIGNER_A, weight: 5 },
+        { publicKey: SIGNER_B, weight: 1 },
+        { publicKey: SIGNER_C, weight: 1 },
+      ],
+      requiredWeight: 5,
+    });
+
+  it("is not ready when several light signers have signed but weight is below threshold", () => {
+    const t = weighted();
+    t.addSignature(SIGNER_B, fakeXdr(1));
+    t.addSignature(SIGNER_C, fakeXdr(2));
+    expect(t.snapshot.collectedCount).toBe(2);
+    expect(t.snapshot.collectedWeight).toBe(2);
+    expect(t.isReady).toBe(false);
+  });
+
+  it("is ready with a single heavy signer despite a headcount of one", () => {
+    const t = weighted();
+    t.addSignature(SIGNER_A, fakeXdr(1));
+    expect(t.snapshot.collectedCount).toBe(1);
+    expect(t.isReady).toBe(true);
+  });
+
+  it("becomes not ready again when a signer is declined after signing", () => {
+    const t = weighted();
+    t.addSignature(SIGNER_A, fakeXdr(1));
+    t.markDeclined(SIGNER_A);
+    expect(t.isReady).toBe(false);
+  });
+
+  it("rejects configs whose total weight cannot meet the threshold", () => {
+    expect(() =>
+      new MultiSigTracker({
+        unsignedXdr: fakeXdr(0),
+        signers: [{ publicKey: SIGNER_A, weight: 1 }],
+        requiredWeight: 2,
+      })
+    ).toThrow(/Combined signer weight/);
+  });
+});
+
+describe("fetchMultiSigConfig", () => {
+  const horizonWith = (thresholds: Record<string, number>) =>
+    vi.mocked(getHorizonClient).mockReturnValue({
+      loadAccount: vi.fn().mockResolvedValue({
+        thresholds,
+        signers: [
+          { key: SIGNER_A, weight: 3, type: "ed25519_public_key" },
+          { key: SIGNER_B, weight: 0, type: "ed25519_public_key" },
+          { key: SIGNER_C, weight: 2, type: "ed25519_public_key" },
+        ],
+      }),
+    } as unknown as ReturnType<typeof getHorizonClient>);
+
+  it("reads weighted signers and the medium threshold by default, dropping weight-0 signers", async () => {
+    horizonWith({ low_threshold: 1, med_threshold: 4, high_threshold: 5 });
+    const cfg = await fetchMultiSigConfig(SIGNER_A);
+    expect(cfg.requiredWeight).toBe(4);
+    expect(cfg.signers).toEqual([
+      { publicKey: SIGNER_A, weight: 3 },
+      { publicKey: SIGNER_C, weight: 2 },
+    ]);
+  });
+
+  it("selects the requested threshold level", async () => {
+    horizonWith({ low_threshold: 1, med_threshold: 4, high_threshold: 5 });
+    expect((await fetchMultiSigConfig(SIGNER_A, "high")).requiredWeight).toBe(5);
+    expect((await fetchMultiSigConfig(SIGNER_A, "low")).requiredWeight).toBe(1);
   });
 });

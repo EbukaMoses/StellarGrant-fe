@@ -9,7 +9,7 @@
  * @example
  * ```tsx
  * const { status, addSignature, submitWhenReady, isSubmitting, txHash, error } =
- *   useMultiSig({ unsignedXdr, requiredSignatures: 2, signerPublicKeys });
+ *   useMultiSig({ unsignedXdr, signers, requiredWeight });
  *
  * // When a signer's signed XDR arrives:
  * addSignature("GAAA...", signedXdr);
@@ -24,11 +24,7 @@ import {
   type TransactionXdr,
 } from "@/lib/stellar/multisig";
 
-export interface UseMultiSigOptions {
-  unsignedXdr: TransactionXdr;
-  requiredSignatures: number;
-  signerPublicKeys: string[];
-}
+export type UseMultiSigOptions = ConstructorParameters<typeof MultiSigTracker>[0];
 
 export interface UseMultiSigResult {
   /** Current signature collection status */
@@ -83,7 +79,7 @@ export function useMultiSig(options: UseMultiSigOptions): UseMultiSigResult {
 
   const submitWhenReady = useCallback(async () => {
     if (!tracker.isReady) {
-      setError(`Not enough signatures yet (${status.collectedCount}/${status.requiredSignatures})`);
+      setError(`Not enough signatures yet (weight ${status.collectedWeight}/${status.requiredWeight})`);
       return;
     }
 
@@ -98,7 +94,7 @@ export function useMultiSig(options: UseMultiSigOptions): UseMultiSigResult {
     } finally {
       setIsSubmitting(false);
     }
-  }, [status.collectedCount, status.requiredSignatures, tracker]);
+  }, [status.collectedWeight, status.requiredWeight, tracker]);
 
   return {
     status,

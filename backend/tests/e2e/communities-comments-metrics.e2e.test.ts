@@ -1,4 +1,6 @@
 import request from "supertest";
+import { Keypair } from "@stellar/stellar-sdk";
+import { signedUserHeaders } from "../helpers/sign-user";
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { DataSource } from "typeorm";
 import { createApp } from "../../src/app";
@@ -14,7 +16,8 @@ describe("Communities, comments, and metrics e2e", () => {
   let dataSource: DataSource;
   const sorobanClient = new MockSorobanContractClient();
 
-  const adminAddress = "GADMINEXAMPLEADDRESS000000000000000000000000000000000000";
+  const adminKey = Keypair.random();
+  const adminAddress = adminKey.publicKey();
 
   const previousAdminAddresses = [...env.adminAddresses];
   const previousMetricsUser = env.metricsBasicAuthUser;
@@ -84,7 +87,7 @@ describe("Communities, comments, and metrics e2e", () => {
 
     const created = await request(app)
       .post("/communities")
-      .set("x-user-address", adminAddress)
+      .set(signedUserHeaders(adminKey, "POST", "/communities"))
       .send({
         name: "DAO Builders",
         description: "Community for DAO-native grant programs",
@@ -97,7 +100,7 @@ describe("Communities, comments, and metrics e2e", () => {
 
     const linked = await request(app)
       .post(`/communities/${communityId}/grants/1`)
-      .set("x-user-address", adminAddress);
+      .set(signedUserHeaders(adminKey, "POST", `/communities/${communityId}/grants/1`));
 
     expect(linked.status).toBe(200);
     expect(linked.body.data.communityId).toBe(communityId);

@@ -13,6 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { Milestone, MilestoneVote, Grant } from "@/types";
 import { API_URL } from "@/lib/constants";
 import { useWalletStore } from "@/lib/store/walletStore";
+import { fetchGrantReviewers } from "@/lib/grants/api";
 
 interface UseMilestoneReturn {
   milestone: Milestone | null;
@@ -31,10 +32,24 @@ interface UseMilestoneReturn {
 
 type GrantWithMilestones = Grant & { milestones?: (Milestone & { votes?: MilestoneVote[] })[] };
 
-async function fetchGrantWithMilestones(grantId: string): Promise<GrantWithMilestones> {
+/**
+ * The grant payload from the API has no `reviewers` field — reviewers live on
+ * a separate endpoint, so fetch them and attach them to the grant.
+ */
+export async function fetchGrantWithMilestones(grantId: string): Promise<GrantWithMilestones> {
   const res = await fetch(`${API_URL}/grants/${grantId}`);
   if (!res.ok) throw new Error(`Failed to fetch grant: ${res.statusText}`);
-  return res.json() as Promise<GrantWithMilestones>;
+  const json = (await res.json()) as { data?: GrantWithMilestones } & GrantWithMilestones;
+  const grant = json.data ?? json;
+
+  let reviewers: string[] = [];
+  try {
+    reviewers = await fetchGrantReviewers(grantId);
+  } catch {
+    reviewers = [];
+  }
+
+  return { ...grant, reviewers };
 }
 
 export function useMilestone(grantId: string, milestoneIdx: number): UseMilestoneReturn {
@@ -52,14 +67,14 @@ export function useMilestone(grantId: string, milestoneIdx: number): UseMileston
   const votes: MilestoneVote[] = (milestone as (Milestone & { votes?: MilestoneVote[] }) | null)?.votes ?? [];
   const grant = grantData ?? null;
 
-  const isReviewer = grant?.reviewers.includes(address ?? "") ?? false;
+  const isReviewer = grant?.reviewers?.includes(address ?? "") ?? false;
   const isRecipient = grant?.recipient === address;
   const hasVoted = votes.some((v) => v.reviewer === address && v.vote !== null);
   const myVote = votes.find((v) => v.reviewer === address);
   const currentVote = myVote?.vote === "approve" ? true : myVote?.vote === "reject" ? false : null;
   const approvalCount = votes.filter((v) => v.vote === "approve").length;
   const rejectionCount = votes.filter((v) => v.vote === "reject").length;
-  const quorum = grant?.reviewers.length ?? 0;
+  const quorum = grant?.reviewers?.length ?? 0;
 
   return {
     milestone,

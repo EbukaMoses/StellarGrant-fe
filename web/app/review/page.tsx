@@ -21,6 +21,7 @@ import { useWalletStore } from "@/lib/store/walletStore";
 import { useReputation } from "@/hooks/useReputation";
 import { api } from "@/lib/api";
 import { ConfirmationDialog } from "@/components/ui/ConfirmationDialog";
+import { useContractTransaction } from "@/hooks/useContractTransaction";
 import { StellarGrantsContext } from "@/components/StellarGrantsProvider";
 import Link from "next/link";
 
@@ -41,6 +42,8 @@ interface PendingMilestone {
   proofHash: string;
   submittedAt: string;
   votes: { reviewer: string; vote: "approve" | "reject" | null }[];
+  /** Number of reviewers assigned to the grant (vote tally denominator) */
+  reviewerCount?: number;
 }
 
 interface BatchSelection {
@@ -107,6 +110,7 @@ export default function ReviewerDashboard() {
   const [isLoading, setIsLoading] = useState(false);
   const [filter, setFilter] = useState<FilterTab>("all");
   const { score } = useReputation(address);
+  const { execute: executeTransaction } = useContractTransaction();
 
   // Batch state
   const [batchMode, setBatchMode] = useState(false);
@@ -190,7 +194,7 @@ export default function ReviewerDashboard() {
   // ── Batch execution ─────────────────────────────────────────────────────────
 
   async function executeBatch() {
-    if (!ctx || selectedKeys.length === 0) return;
+    if (!ctx || !address || selectedKeys.length === 0) return;
     setIsBatchExecuting(true);
     try {
       const batch = ctx.batch;
@@ -205,11 +209,16 @@ export default function ReviewerDashboard() {
         });
       }
 
+      // Soroban allows one invokeHostFunction op per transaction, so each vote
+      // is built, simulated, signed by the wallet, submitted and polled in turn.
       const result = await batch.execute(async (method, args) => {
-        // In production this calls contractClient[method](args) via Freighter.
-        // Stub returns the method name as a pseudo-txHash for now.
-        console.info(`[batch] executing ${method}`, args);
-        return method;
+        const voteXdr = await ctx.client.voteOnMilestone(
+          String(args.grant_id),
+          Number(args.milestone_idx),
+          method === "milestoneApprove",
+          address
+        );
+        return executeTransaction({ xdr: voteXdr });
       });
 
       const succeeded = result.operations.filter(
@@ -218,7 +227,7 @@ export default function ReviewerDashboard() {
 
       setToastMessage(
         result.allSucceeded
-          ? `${succeeded} milestone${succeeded !== 1 ? "s" : ""} voted in one transaction`
+          ? `${succeeded} milestone${succeeded !== 1 ? "s" : ""} voted on-chain`
           : `${succeeded} of ${selectedKeys.length} milestones submitted (some failed)`
       );
 
@@ -303,7 +312,7 @@ export default function ReviewerDashboard() {
                 {batchMode && (
                   <p className="font-mono text-xs text-text-muted">
                     Select up to {BATCH_MAX} milestones to vote in one
-                    transaction.
+                    batch (each vote is signed separately).
                   </p>
                 )}
               </div>
@@ -331,6 +340,7 @@ export default function ReviewerDashboard() {
                   const approvalCount = m.votes.filter(
                     (v) => v.vote === "approve"
                   ).length;
+                  const reviewerCount = m.reviewerCount ?? m.votes.length;
                   const hasVoted = m.votes.some(
                     (v) => v.reviewer === address && v.vote !== null
                   );
@@ -369,7 +379,7 @@ export default function ReviewerDashboard() {
                         )}
                       </div>
                       <p className="font-mono text-xs text-text-muted">
-                        Vote tally: {approvalCount} of 5 approved
+                        Vote tally: {approvalCount} of {reviewerCount} approved
                       </p>
                       {m.proofHash && (
                         <p className="font-mono text-[10px] text-text-muted">
@@ -497,7 +507,7 @@ export default function ReviewerDashboard() {
         onConfirm={executeBatch}
         isLoading={isBatchExecuting}
         title="Confirm Batch Vote"
-        description={`You are about to submit votes for ${selectedKeys.length} milestone${selectedKeys.length !== 1 ? "s" : ""} (${approveCount} approve, ${rejectCount} reject) in a single transaction. This cannot be undone.`}
+        description={`You are about to submit votes for ${selectedKeys.length} milestone${selectedKeys.length !== 1 ? "s" : ""} (${approveCount} approve, ${rejectCount} reject) . You will be asked to sign each vote in your wallet. This cannot be undone.`}
         confirmLabel="Submit"
         variant="default"
       />
