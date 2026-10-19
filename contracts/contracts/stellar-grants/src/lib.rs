@@ -790,6 +790,7 @@ impl StellarGrantsContract {
     }
 
     /// Allows authorized reviewers to reject milestones with a reason.
+    /// Uses the shared voting path for validation and rejection side effects.
     pub fn milestone_reject(
         env: Env,
         grant_id: u64,
@@ -797,62 +798,18 @@ impl StellarGrantsContract {
         reviewer: Address,
         reason: String,
     ) -> Result<bool, ContractError> {
-        emergency::require_not_paused(&env)?;
-        crate::grant_pause::require_not_paused(&env, grant_id)?;
-        circuit_breaker::require_open(&env, ProtocolModule::Grants)?;
-        reviewer.require_auth();
-
-        let grant = Storage::get_grant_v(&env, grant_id);
-        let mut milestone = Storage::get_milestone_v(&env, grant_id, milestone_idx);
-
-        if milestone.state != MilestoneState::Submitted {
-            env.panic_with_error(ContractError::MilestoneNotSubmitted);
-        }
-
-        if !grant.reviewers.contains(reviewer.clone()) {
-            env.panic_with_error(ContractError::Unauthorized);
-        }
-
-        if milestone.votes.contains_key(reviewer.clone()) {
-            env.panic_with_error(ContractError::AlreadyVoted);
-        }
-
-        let reputation = Storage::get_reviewer_reputation(&env, reviewer.clone());
-        milestone.votes.set(reviewer.clone(), false);
-        milestone.rejections = milestone.rejections.saturating_add(reputation);
-        milestone.reasons.set(reviewer.clone(), reason.clone());
-
-        let total_weight = milestone.reviewer_count_snapshot;
-
-        let majority_threshold = (total_weight / 2) + 1;
-        let majority_rejected = milestone.rejections >= majority_threshold;
-
-        if majority_rejected {
-            milestone.state = MilestoneState::Rejected;
-            milestone.status_updated_at = env.ledger().timestamp();
-
-            for (voter, voted_approve) in milestone.votes.iter() {
-                if !voted_approve {
-                    let mut rep = Storage::get_reviewer_reputation(&env, voter.clone());
-                    rep += 1;
-                    Storage::set_reviewer_reputation(&env, voter.clone(), rep);
-                }
-            }
-
-            Events::milestone_status_changed(
-                &env,
-                grant_id,
-                milestone_idx,
-                MilestoneState::Rejected,
-            );
-        }
-
-        Storage::set_milestone(&env, grant_id, milestone_idx, &milestone);
-        // Issue #817: keep the data_export staleness/filter API fresh.
-        data_export::set_last_updated(&env, grant_id, env.ledger().timestamp());
+        let quorum_reached = Self::milestone_vote(
+            env.clone(),
+            grant_id,
+            milestone_idx,
+            reviewer.clone(),
+            false,
+            Some(reason.clone()),
+        )?;
+        // Preserve the dedicated event for existing rejection subscribers.
         Events::milestone_rejected(&env, grant_id, milestone_idx, reviewer, reason);
 
-        Ok(majority_rejected)
+        Ok(quorum_reached)
     }
 
     /// Allows a grant recipient to submit a completed milestone for reviewer evaluation.

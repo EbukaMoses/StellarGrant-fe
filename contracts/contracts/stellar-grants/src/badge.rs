@@ -100,19 +100,20 @@ fn write_award(
 
     let mut badges = get_badges_raw(env, contributor);
     badges.push_back(record.clone());
+    let list_key = BadgeKey::BadgeList(contributor.clone());
+    env.storage().persistent().set(&list_key, &badges);
     env.storage()
         .persistent()
-        .set(&BadgeKey::BadgeList(contributor.clone()), &badges);
+        .extend_ttl(&list_key, BADGE_TTL_THRESHOLD, BADGE_TTL_EXTEND_TO);
 
-    let count: u32 = env
-        .storage()
+    let count_key = BadgeKey::BadgeAwardCount(badge_type.clone());
+    let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+    env.storage()
         .persistent()
-        .get(&BadgeKey::BadgeAwardCount(badge_type.clone()))
-        .unwrap_or(0);
-    env.storage().persistent().set(
-        &BadgeKey::BadgeAwardCount(badge_type.clone()),
-        &count.saturating_add(1),
-    );
+        .set(&count_key, &count.saturating_add(1));
+    env.storage()
+        .persistent()
+        .extend_ttl(&count_key, BADGE_TTL_THRESHOLD, BADGE_TTL_EXTEND_TO);
 
     BadgeAwarded {
         contributor: contributor.clone(),
@@ -218,10 +219,14 @@ pub fn get_criteria(badge_type: BadgeType) -> BadgeCriteria {
 }
 
 pub fn award_count(env: &Env, badge_type: BadgeType) -> u32 {
-    env.storage()
-        .persistent()
-        .get(&BadgeKey::BadgeAwardCount(badge_type))
-        .unwrap_or(0)
+    let key = BadgeKey::BadgeAwardCount(badge_type);
+    let count = env.storage().persistent().get(&key);
+    if count.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, BADGE_TTL_THRESHOLD, BADGE_TTL_EXTEND_TO);
+    }
+    count.unwrap_or(0)
 }
 
 pub fn manual_award(
@@ -242,12 +247,149 @@ pub fn manual_award(
 mod tests {
     use super::*;
     use crate::types::ContributorProfile;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{storage::Persistent as _, Address as _, Ledger as _};
     use soroban_sdk::{Env, String, Vec};
 
     fn run<T>(env: &Env, f: impl FnOnce() -> T) -> T {
         let contract_id = env.register(crate::StellarGrantsContract, ());
         env.as_contract(&contract_id, f)
+    }
+
+    fn setup_ttl_test() -> (Env, Address) {
+        let env = Env::default();
+        env.ledger().with_mut(|ledger| {
+            ledger.max_entry_ttl = BADGE_TTL_EXTEND_TO * 2;
+        });
+        let contract = env.register(crate::StellarGrantsContract, ());
+        (env, contract)
+    }
+
+    fn decay_ttl(env: &Env) {
+        env.ledger().with_mut(|ledger| {
+            ledger.sequence_number += BADGE_TTL_EXTEND_TO - BADGE_TTL_THRESHOLD / 2;
+        });
+    }
+
+    #[test]
+    fn awards_extend_all_written_keys_and_preserve_lists_and_counts() {
+        let (env, contract) = setup_ttl_test();
+        let contributor = Address::generate(&env);
+        let other_contributor = Address::generate(&env);
+        env.as_contract(&contract, || {
+            assert!(write_award(
+                &env,
+                &contributor,
+                BadgeType::FirstMilestone,
+                Some(1),
+                Some(0)
+            ));
+            for key in [
+                BadgeKey::Badge(contributor.clone(), BadgeType::FirstMilestone),
+                BadgeKey::BadgeList(contributor.clone()),
+                BadgeKey::BadgeAwardCount(BadgeType::FirstMilestone),
+            ] {
+                assert_eq!(
+                    env.storage().persistent().get_ttl(&key),
+                    BADGE_TTL_EXTEND_TO
+                );
+            }
+        });
+
+        decay_ttl(&env);
+        env.as_contract(&contract, || {
+            for key in [
+                BadgeKey::BadgeList(contributor.clone()),
+                BadgeKey::BadgeAwardCount(BadgeType::FirstMilestone),
+            ] {
+                assert!(env.storage().persistent().get_ttl(&key) < BADGE_TTL_THRESHOLD);
+            }
+            assert!(write_award(
+                &env,
+                &contributor,
+                BadgeType::TenMilestones,
+                Some(2),
+                Some(0)
+            ));
+            assert!(write_award(
+                &env,
+                &other_contributor,
+                BadgeType::FirstMilestone,
+                Some(3),
+                Some(0)
+            ));
+            // Check before the getters can refresh either key.
+            for key in [
+                BadgeKey::BadgeList(contributor.clone()),
+                BadgeKey::BadgeAwardCount(BadgeType::FirstMilestone),
+            ] {
+                assert_eq!(
+                    env.storage().persistent().get_ttl(&key),
+                    BADGE_TTL_EXTEND_TO
+                );
+            }
+            let badges = get_badges(&env, &contributor);
+            assert_eq!(badges.len(), 2);
+            assert_eq!(badges.get(0).unwrap().badge_type, BadgeType::FirstMilestone);
+            assert_eq!(badges.get(1).unwrap().badge_type, BadgeType::TenMilestones);
+            assert_eq!(award_count(&env, BadgeType::FirstMilestone), 2);
+            assert_eq!(award_count(&env, BadgeType::TenMilestones), 1);
+        });
+    }
+
+    #[test]
+    fn badge_reads_renew_all_existing_keys() {
+        let (env, contract) = setup_ttl_test();
+        let contributor = Address::generate(&env);
+        env.as_contract(&contract, || {
+            assert!(write_award(
+                &env,
+                &contributor,
+                BadgeType::FirstMilestone,
+                Some(1),
+                Some(0)
+            ));
+        });
+        decay_ttl(&env);
+        env.as_contract(&contract, || {
+            for key in [
+                BadgeKey::Badge(contributor.clone(), BadgeType::FirstMilestone),
+                BadgeKey::BadgeList(contributor.clone()),
+                BadgeKey::BadgeAwardCount(BadgeType::FirstMilestone),
+            ] {
+                assert!(env.storage().persistent().get_ttl(&key) < BADGE_TTL_THRESHOLD);
+            }
+            assert!(has_badge(&env, &contributor, BadgeType::FirstMilestone));
+            assert_eq!(get_badges(&env, &contributor).len(), 1);
+            assert_eq!(award_count(&env, BadgeType::FirstMilestone), 1);
+            for key in [
+                BadgeKey::Badge(contributor.clone(), BadgeType::FirstMilestone),
+                BadgeKey::BadgeList(contributor.clone()),
+                BadgeKey::BadgeAwardCount(BadgeType::FirstMilestone),
+            ] {
+                assert_eq!(
+                    env.storage().persistent().get_ttl(&key),
+                    BADGE_TTL_EXTEND_TO
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn missing_badge_reads_do_not_create_entries() {
+        let (env, contract) = setup_ttl_test();
+        let contributor = Address::generate(&env);
+        env.as_contract(&contract, || {
+            assert!(!has_badge(&env, &contributor, BadgeType::FirstMilestone));
+            assert!(get_badges(&env, &contributor).is_empty());
+            assert_eq!(award_count(&env, BadgeType::FirstMilestone), 0);
+            for key in [
+                BadgeKey::Badge(contributor.clone(), BadgeType::FirstMilestone),
+                BadgeKey::BadgeList(contributor.clone()),
+                BadgeKey::BadgeAwardCount(BadgeType::FirstMilestone),
+            ] {
+                assert!(!env.storage().persistent().has(&key));
+            }
+        });
     }
 
     fn set_profile(

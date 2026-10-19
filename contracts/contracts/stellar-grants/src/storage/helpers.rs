@@ -1118,48 +1118,57 @@ impl Storage {
     // ── Issue #571: Grant Tags Module ─────────────────────────────────────────
 
     pub fn get_grant_tags(env: &Env, grant_id: u64) -> Option<GrantTag> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Grant(GrantKey::Tags(grant_id)))
+        let key = DataKey::Grant(GrantKey::Tags(grant_id));
+        let tags = env.storage().persistent().get(&key);
+        if tags.is_some() {
+            Self::bump(env, &key);
+        }
+        tags
     }
 
     pub fn set_grant_tags(env: &Env, tags: &GrantTag) {
-        env.storage()
-            .persistent()
-            .set(&DataKey::Grant(GrantKey::Tags(tags.grant_id)), tags);
+        let key = DataKey::Grant(GrantKey::Tags(tags.grant_id));
+        env.storage().persistent().set(&key, tags);
+        Self::bump(env, &key);
     }
 
     pub fn get_tag_index(env: &Env, tag_hash: u32) -> Vec<u64> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Grant(GrantKey::TagIndex(tag_hash)))
-            .unwrap_or_else(|| Vec::new(env))
+        let key = DataKey::Grant(GrantKey::TagIndex(tag_hash));
+        let ids = env.storage().persistent().get(&key);
+        if ids.is_some() {
+            Self::bump(env, &key);
+        }
+        ids.unwrap_or_else(|| Vec::new(env))
     }
 
     pub fn set_tag_index(env: &Env, tag_hash: u32, grant_ids: &Vec<u64>) {
-        env.storage()
-            .persistent()
-            .set(&DataKey::Grant(GrantKey::TagIndex(tag_hash)), grant_ids);
+        let key = DataKey::Grant(GrantKey::TagIndex(tag_hash));
+        env.storage().persistent().set(&key, grant_ids);
+        Self::bump(env, &key);
     }
 
     pub fn get_category_list(env: &Env) -> Vec<GrantCategory> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Grant(GrantKey::CategoryList))
-            .unwrap_or_else(|| Vec::new(env))
+        let key = DataKey::Grant(GrantKey::CategoryList);
+        let categories = env.storage().persistent().get(&key);
+        if categories.is_some() {
+            Self::bump(env, &key);
+        }
+        categories.unwrap_or_else(|| Vec::new(env))
     }
 
     pub fn set_category_list(env: &Env, categories: &Vec<GrantCategory>) {
-        env.storage()
-            .persistent()
-            .set(&DataKey::Grant(GrantKey::CategoryList), categories);
+        let key = DataKey::Grant(GrantKey::CategoryList);
+        env.storage().persistent().set(&key, categories);
+        Self::bump(env, &key);
     }
 
     pub fn get_category_index(env: &Env, category_id: u32) -> Vec<u64> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Grant(GrantKey::CategoryIndex(category_id)))
-            .unwrap_or_else(|| Vec::new(env))
+        let key = DataKey::Grant(GrantKey::CategoryIndex(category_id));
+        let ids = env.storage().persistent().get(&key);
+        if ids.is_some() {
+            Self::bump(env, &key);
+        }
+        ids.unwrap_or_else(|| Vec::new(env))
     }
 
     pub fn set_category_index(env: &Env, category_id: u32, grant_ids: &Vec<u64>) {
@@ -2761,6 +2770,111 @@ mod tests {
         env.ledger().with_mut(|li| {
             li.sequence_number += by;
             li.max_entry_ttl = li.max_entry_ttl.max(PERSISTENT_TTL_EXTEND_TO * 2);
+        });
+    }
+
+    fn assert_tag_storage_ttl(env: &Env, key: &DataKey, write: impl Fn(), read: impl Fn()) {
+        let contract = env.register(crate::StellarGrantsContract, ());
+        advance_ledger_sequence(env, 0);
+        env.as_contract(&contract, || {
+            write();
+            assert_eq!(
+                env.storage().persistent().get_ttl(key),
+                PERSISTENT_TTL_EXTEND_TO
+            );
+        });
+        for access in [&read as &dyn Fn(), &write as &dyn Fn()] {
+            advance_ledger_sequence(env, PERSISTENT_TTL_EXTEND_TO - PERSISTENT_TTL_THRESHOLD / 2);
+            env.as_contract(&contract, || {
+                assert!(env.storage().persistent().get_ttl(key) < PERSISTENT_TTL_THRESHOLD);
+                access();
+                assert_eq!(
+                    env.storage().persistent().get_ttl(key),
+                    PERSISTENT_TTL_EXTEND_TO
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn test_grant_tags_storage_extends_ttl() {
+        let env = Env::default();
+        let tags = GrantTag {
+            grant_id: 1,
+            category_id: Some(2),
+            subcategory: None,
+            freeform_tags: Vec::from_array(&env, [String::from_str(&env, "rust")]),
+            tagged_by: Address::generate(&env),
+            tagged_at: 0,
+        };
+        assert_tag_storage_ttl(
+            &env,
+            &DataKey::Grant(GrantKey::Tags(1)),
+            || Storage::set_grant_tags(&env, &tags),
+            || assert_eq!(Storage::get_grant_tags(&env, 1), Some(tags.clone())),
+        );
+    }
+
+    #[test]
+    fn test_tag_index_storage_extends_ttl() {
+        let env = Env::default();
+        let ids = Vec::from_array(&env, [1_u64, 2]);
+        assert_tag_storage_ttl(
+            &env,
+            &DataKey::Grant(GrantKey::TagIndex(7)),
+            || Storage::set_tag_index(&env, 7, &ids),
+            || assert_eq!(Storage::get_tag_index(&env, 7), ids),
+        );
+    }
+
+    #[test]
+    fn test_category_list_storage_extends_ttl() {
+        let env = Env::default();
+        let categories = Vec::from_array(
+            &env,
+            [GrantCategory {
+                id: 2,
+                name: String::from_str(&env, "Infrastructure"),
+                subcategories: Vec::new(&env),
+            }],
+        );
+        assert_tag_storage_ttl(
+            &env,
+            &DataKey::Grant(GrantKey::CategoryList),
+            || Storage::set_category_list(&env, &categories),
+            || assert_eq!(Storage::get_category_list(&env), categories),
+        );
+    }
+
+    #[test]
+    fn test_category_index_storage_extends_ttl() {
+        let env = Env::default();
+        let ids = Vec::from_array(&env, [1_u64, 2]);
+        assert_tag_storage_ttl(
+            &env,
+            &DataKey::Grant(GrantKey::CategoryIndex(2)),
+            || Storage::set_category_index(&env, 2, &ids),
+            || assert_eq!(Storage::get_category_index(&env, 2), ids),
+        );
+    }
+
+    #[test]
+    fn test_missing_tag_storage_reads_do_not_create_entries() {
+        let env = Env::default();
+        let contract = env.register(crate::StellarGrantsContract, ());
+        env.as_contract(&contract, || {
+            assert_eq!(Storage::get_grant_tags(&env, 1), None);
+            assert!(Storage::get_tag_index(&env, 7).is_empty());
+            assert!(Storage::get_category_list(&env).is_empty());
+            assert!(Storage::get_category_index(&env, 2).is_empty());
+            for key in [
+                GrantKey::Tags(1),
+                GrantKey::TagIndex(7),
+                GrantKey::CategoryList,
+                GrantKey::CategoryIndex(2),
+            ] {
+                assert!(!env.storage().persistent().has(&DataKey::Grant(key)));
+            }
         });
     }
 
