@@ -241,6 +241,51 @@ mod tests {
     }
 
     #[test]
+    fn test_public_attach_license_preserves_record_and_events_on_retry() {
+        use soroban_sdk::testutils::{Events, Ledger};
+
+        let (env, contract_id, owner, _) = setup();
+        env.as_contract(&contract_id, || {
+            create_grant_with_milestone(&env, &owner, 1);
+        });
+        let client = crate::StellarGrantsContractClient::new(&env, &contract_id);
+        let spdx_id = String::from_str(&env, "MIT");
+        let rights = IpRights {
+            commercial_use: true,
+            modification: true,
+            distribution: true,
+            sublicense: true,
+        };
+        let restrictions = String::from_str(&env, "Preserve copyright notice");
+        let original = client.attach_license(
+            &owner,
+            &1,
+            &0,
+            &spdx_id,
+            &LicenseType::OpenSource,
+            &rights,
+            &restrictions,
+        );
+        let events = env.events().all();
+        env.ledger().with_mut(|ledger| ledger.timestamp += 60);
+
+        assert_eq!(
+            client.try_attach_license(
+                &owner,
+                &1,
+                &0,
+                &spdx_id,
+                &LicenseType::OpenSource,
+                &rights,
+                &restrictions,
+            ),
+            Err(Ok(ContractError::InvalidState))
+        );
+        assert_eq!(client.get_license(&1, &0), Some(original));
+        assert_eq!(env.events().all(), events);
+    }
+
+    #[test]
     fn test_get_license_returns_none_when_not_set() {
         let (env, contract_id, _, _) = setup();
         env.as_contract(&contract_id, || {
