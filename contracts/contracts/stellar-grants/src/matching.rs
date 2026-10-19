@@ -433,7 +433,7 @@ mod tests {
             let asset = token::StellarAssetClient::new(&env, &token);
             asset.mint(&funder, &100);
             asset.mint(&contract_id, &500);
-            Storage::set_grant_counter(&env, 1);
+            assert_eq!(Storage::increment_grant_counter(&env), 1);
             Storage::set_grant(
                 &env,
                 1,
@@ -527,6 +527,47 @@ mod tests {
             assert!(get_round(&env, 1).unwrap().distributed);
             assert_eq!(distribute(&env, 1), Err(ContractError::InvalidState));
             assert_eq!(crate::escrow::get_account(&env, 1).unwrap().balance, 600);
+        });
+    }
+
+    #[test]
+    fn test_matching_credit_rejects_invalid_amount_token_and_overflow() {
+        use crate::storage::Storage;
+
+        let (env, contract_id, token, _) = setup_funded_round();
+        env.as_contract(&contract_id, || {
+            let before = crate::escrow::get_account(&env, 1).unwrap();
+            let wrong_token = Address::generate(&env);
+            for amount in [0, -1] {
+                assert_eq!(
+                    crate::escrow::credit_matching_pool(&env, 1, &token, amount),
+                    Err(ContractError::ZeroAmount)
+                );
+            }
+            assert_eq!(
+                crate::escrow::credit_matching_pool(&env, 1, &wrong_token, 500),
+                Err(ContractError::InvalidInput)
+            );
+            assert_eq!(
+                crate::escrow::credit_matching_pool(&env, 999, &token, 500),
+                Err(ContractError::EscrowNotFound)
+            );
+            assert_eq!(crate::escrow::get_account(&env, 1).unwrap(), before);
+            for overflow_balance in [true, false] {
+                let mut account = before.clone();
+                if overflow_balance {
+                    account.balance = i128::MAX;
+                } else {
+                    account.total_deposited = i128::MAX;
+                }
+                Storage::set_escrow_account(&env, 1, &account);
+                assert_eq!(
+                    crate::escrow::credit_matching_pool(&env, 1, &token, 1),
+                    Err(ContractError::InvalidInput)
+                );
+                assert_eq!(crate::escrow::get_account(&env, 1).unwrap(), account);
+                assert_eq!(Storage::get_grant(&env, 1).unwrap().escrow_balance, 100);
+            }
         });
     }
 
