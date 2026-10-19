@@ -314,6 +314,15 @@ must not be indexed:
 
 ### Referrals (`referral.rs`)
 
+- **ReferralRewardFailed** (`fees.rs`): A referral reward trigger returned an
+  error after the protocol fee was split. The payment continues with its
+  calculated net amount; this event does not imply a retry or rollback.
+  - Topic: `referral_reward_failed`
+  - Payload: `payer: Address`, `token: Address`, `fee_amount: i128`, `error_code: u32`
+  - `fee_amount` is the protocol fee passed to the referral trigger, not the
+    reward amount. `error_code` is the numeric `ContractError` discriminant.
+  - Successful rewards and no-op triggers emit no failure event. Monitor this
+    event to investigate referral accounting failures.
 - **ReferralCodeCreated**: Referral code created.
   - Payload: `referrer: Address`, `code_hash: Bytes`
 - **ReferralApplied**: Referral code applied.

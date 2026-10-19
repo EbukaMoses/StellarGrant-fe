@@ -35,6 +35,9 @@ pub fn net_of_fee(gross: i128, fee_bps: u32) -> Result<i128, ContractError> {
 /// then return the net amount payable to the grant recipient.
 ///
 /// Called automatically by the payment flow in `lib.rs`.
+/// Referral trigger errors emit `ReferralRewardFailed` without aborting the
+/// payment or reversing the fee split. Successful and no-op triggers do not
+/// emit that event.
 pub fn deduct_and_split_fee(
     env: &Env,
     token: &Address,
