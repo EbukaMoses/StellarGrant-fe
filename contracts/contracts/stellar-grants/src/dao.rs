@@ -394,6 +394,52 @@ mod tests {
     }
 
     #[test]
+    fn test_finalize_deadline_quorum_and_majority_boundaries() {
+        for (votes_for, votes_against, expected) in [
+            (0, 0, DaoProposalStatus::Rejected),
+            (9, 0, DaoProposalStatus::Rejected),
+            (10, 0, DaoProposalStatus::Passed),
+            (5, 5, DaoProposalStatus::Rejected),
+            (4, 6, DaoProposalStatus::Rejected),
+            (u64::MAX, 1, DaoProposalStatus::Passed),
+        ] {
+            let env = Env::default();
+            with_contract(&env, || {
+                Storage::set_dao_quorum_votes(&env, 10);
+                let proposal = DaoProposal {
+                    id: 1,
+                    proposer: Address::generate(&env),
+                    title: String::from_str(&env, "Boundary test"),
+                    description: String::from_str(&env, ""),
+                    proposal_type: DaoProposalType::Generic,
+                    status: DaoProposalStatus::Active,
+                    votes_for,
+                    votes_against,
+                    created_at: 0,
+                    voting_deadline: 10,
+                    executed_at: None,
+                };
+                Storage::set_dao_proposal(&env, &proposal);
+                for timestamp in [9, 10] {
+                    env.ledger().with_mut(|ledger| ledger.timestamp = timestamp);
+                    assert_eq!(
+                        finalize(&env, 1),
+                        Err(ContractError::DaoProposalVotingClosed)
+                    );
+                    assert_eq!(get_proposal(&env, 1), Some(proposal.clone()));
+                }
+                env.ledger().with_mut(|ledger| ledger.timestamp = 11);
+                assert_eq!(finalize(&env, 1), Ok(expected.clone()));
+                let finalized = get_proposal(&env, 1).unwrap();
+                assert_eq!(finalized.status, expected);
+                assert_eq!(finalized.votes_for, votes_for);
+                assert_eq!(finalized.votes_against, votes_against);
+                assert_eq!(finalized.executed_at, None);
+            });
+        }
+    }
+
+    #[test]
     fn test_execute_non_passed_proposal_rejected() {
         let env = Env::default();
         env.mock_all_auths();
