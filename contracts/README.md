@@ -267,6 +267,21 @@ Core grant flows now honor these roles without changing the contract structure:
 - `Pauser`: global pause and unpause authority
 - `Admin`: upgrade, treasury, council, and other protocol-level controls
 
+## Quadratic Matching and Funder Reports
+
+Matching-pool tokens are deposited when a round is created. Distribution credits
+each allocated amount to the grant's escrow balance and total deposited amount,
+and mirrors the balance on the grant. It does not transfer tokens again.
+
+Pool allocations do not create personal funder ledgers, escrow funder-list
+entries, grant funder entries, or funder-to-grant index entries for the contract
+address. Existing direct funders and their contribution amounts are preserved.
+Matching allocations remain available through the round's allocation queries.
+The pool token must match both the grant and escrow token.
+
+This behavior applies to new distributions; it does not migrate historical
+funder records created by earlier contract versions.
+
 ## Milestone IP Licenses
 
 The grant owner can call `attach_license` once for each approved milestone.
