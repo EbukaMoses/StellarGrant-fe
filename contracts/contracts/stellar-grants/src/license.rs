@@ -29,6 +29,9 @@ pub fn attach_license(
     if milestone.state != MilestoneState::Approved {
         return Err(ContractError::InvalidState);
     }
+    if Storage::get_license_record(env, grant_id, milestone_idx).is_some() {
+        return Err(ContractError::InvalidState);
+    }
 
     let record = LicenseRecord {
         grant_id,
@@ -156,6 +159,51 @@ mod tests {
 
             let fetched = get_license(&env, 1, 0).unwrap();
             assert_eq!(fetched, record);
+        });
+    }
+
+    #[test]
+    fn test_attach_license_rejects_overwrite() {
+        let (env, contract_id, owner, _) = setup();
+        let original = env.as_contract(&contract_id, || {
+            create_grant_with_milestone(&env, &owner, 1);
+            attach_license(
+                &env,
+                &owner,
+                1,
+                0,
+                String::from_str(&env, "MIT"),
+                LicenseType::OpenSource,
+                IpRights {
+                    commercial_use: true,
+                    modification: true,
+                    distribution: true,
+                    sublicense: true,
+                },
+                String::from_str(&env, "Preserve copyright notice"),
+            )
+            .unwrap()
+        });
+
+        env.as_contract(&contract_id, || {
+            let result = attach_license(
+                &env,
+                &owner,
+                1,
+                0,
+                String::from_str(&env, "PROPRIETARY"),
+                LicenseType::Proprietary,
+                IpRights {
+                    commercial_use: false,
+                    modification: false,
+                    distribution: false,
+                    sublicense: false,
+                },
+                String::from_str(&env, "All rights reserved"),
+            );
+
+            assert_eq!(result, Err(ContractError::InvalidState));
+            assert_eq!(get_license(&env, 1, 0), Some(original));
         });
     }
 
