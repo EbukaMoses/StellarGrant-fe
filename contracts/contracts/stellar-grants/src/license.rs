@@ -208,6 +208,39 @@ mod tests {
     }
 
     #[test]
+    fn test_license_records_are_scoped_to_grant_and_milestone() {
+        let (env, contract_id, owner, _) = setup();
+        for (grant_id, milestone_idx) in [(1, 0), (1, 1), (2, 0)] {
+            env.as_contract(&contract_id, || {
+                if milestone_idx == 0 {
+                    create_grant_with_milestone(&env, &owner, grant_id);
+                } else {
+                    let mut milestone = Storage::get_milestone(&env, grant_id, 0).unwrap();
+                    milestone.idx = milestone_idx;
+                    Storage::set_milestone(&env, grant_id, milestone_idx, &milestone);
+                }
+                let record = attach_license(
+                    &env,
+                    &owner,
+                    grant_id,
+                    milestone_idx,
+                    String::from_str(&env, "MIT"),
+                    LicenseType::OpenSource,
+                    IpRights {
+                        commercial_use: true,
+                        modification: true,
+                        distribution: true,
+                        sublicense: true,
+                    },
+                    String::from_str(&env, ""),
+                )
+                .unwrap();
+                assert_eq!(get_license(&env, grant_id, milestone_idx), Some(record));
+            });
+        }
+    }
+
+    #[test]
     fn test_get_license_returns_none_when_not_set() {
         let (env, contract_id, _, _) = setup();
         env.as_contract(&contract_id, || {
