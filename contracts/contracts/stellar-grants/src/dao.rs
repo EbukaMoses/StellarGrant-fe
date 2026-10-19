@@ -136,11 +136,8 @@ pub fn finalize(env: &Env, proposal_id: u64) -> Result<DaoProposalStatus, Contra
     }
 
     let total_votes = proposal.votes_for.saturating_add(proposal.votes_against);
-    if total_votes < Storage::get_dao_quorum_votes(env) {
-        return Err(ContractError::DaoProposalQuorumNotReached);
-    }
-
-    let passed = proposal.votes_for > proposal.votes_against;
+    let passed = total_votes >= Storage::get_dao_quorum_votes(env)
+        && proposal.votes_for > proposal.votes_against;
     proposal.status = if passed {
         DaoProposalStatus::Passed
     } else {
@@ -365,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn test_finalize_quorum_not_reached_rejected() {
+    fn test_finalize_quorum_not_reached_persists_rejection() {
         let env = Env::default();
         env.mock_all_auths();
         with_contract(&env, || {
@@ -384,7 +381,15 @@ mod tests {
             });
 
             let result = finalize(&env, id);
-            assert_eq!(result, Err(ContractError::DaoProposalQuorumNotReached));
+            assert_eq!(result, Ok(DaoProposalStatus::Rejected));
+            let proposal = get_proposal(&env, id).unwrap();
+            assert_eq!(proposal.status, DaoProposalStatus::Rejected);
+            assert_eq!(proposal.executed_at, None);
+            assert_eq!(finalize(&env, id), Err(ContractError::DaoProposalNotActive));
+            assert_eq!(
+                execute(&env, &proposer, id),
+                Err(ContractError::DaoProposalRejected)
+            );
         });
     }
 
