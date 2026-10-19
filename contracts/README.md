@@ -267,6 +267,17 @@ Core grant flows now honor these roles without changing the contract structure:
 - `Pauser`: global pause and unpause authority
 - `Admin`: upgrade, treasury, council, and other protocol-level controls
 
+## Milestone IP Licenses
+
+The grant owner can call `attach_license` once for each approved milestone.
+The record includes the SPDX identifier, license type, IP rights, restrictions,
+attaching owner, and timestamp. Use `get_license` to retrieve those terms.
+
+Subsequent attachments for the same grant and milestone return `InvalidState`,
+including retries with identical terms. They preserve the original record and
+emit no additional `LicenseAttached` event. Licenses on other milestones or
+grants remain independent. There is no license amendment entry point.
+
 ## 🧪 Fuzz Testing
 
 ### Running Fuzzers

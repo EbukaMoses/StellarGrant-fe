@@ -4,7 +4,13 @@ use crate::types::{ContractError, IpRights, LicenseRecord, LicenseType, Mileston
 use soroban_sdk::{Address, Env, String};
 
 /// Attach a license record to an approved milestone deliverable.
-/// Only the grant owner may call this. The milestone must already exist.
+/// Only the grant owner may call this. Each milestone may have one license record.
+///
+/// # Errors
+/// Returns `Unauthorized` for callers other than the owner, `GrantNotFound` for
+/// missing grants, `MilestoneIndexOutOfBounds` or `MilestoneNotFound` for invalid
+/// milestones, and `InvalidState` for unapproved or already licensed milestones.
+/// A rejected attachment preserves the original terms and emits no license event.
 pub fn attach_license(
     env: &Env,
     caller: &Address,

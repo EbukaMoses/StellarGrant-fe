@@ -3890,7 +3890,9 @@ impl StellarGrantsContract {
     // ── Issue #579: IP License Tracking ──────────────────────────────────────
 
     /// Attach an IP license record to a milestone deliverable.
-    /// Only the grant owner may call this after the milestone exists.
+    /// Only the grant owner may call this after the milestone is approved.
+    /// Returns `InvalidState` if a license is already attached, even if the terms
+    /// are identical. Existing records cannot be amended through this entry point.
     #[allow(clippy::too_many_arguments)]
     pub fn attach_license(
         env: Env,
