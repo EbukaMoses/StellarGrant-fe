@@ -309,17 +309,18 @@ pub fn distribute(env: &Env, round_id: u32) -> Result<(), ContractError> {
         return Err(ContractError::InvalidState);
     }
 
-    // Distribute match amounts to each grant's escrow. A deposit failure aborts
+    // Distribute match amounts to each grant's escrow. A credit failure aborts
     // the whole call so the round is never marked distributed with some
     // allocations left unfunded and unrecoverable.
     for i in 0..round.allocations.len() {
         if let Some(allocation) = round.allocations.get(i) {
             if allocation.match_amount > 0 {
-                // Transfer match amount to grant's escrow
-                crate::escrow::deposit(
+                // Pool tokens are already held by this contract. Credit escrow
+                // without treating the contract address as a contributor.
+                crate::escrow::credit_matching_pool(
                     env,
                     allocation.grant_id,
-                    &env.current_contract_address(),
+                    &round.token,
                     allocation.match_amount,
                 )?;
             }
