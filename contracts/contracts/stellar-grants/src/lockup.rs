@@ -90,18 +90,23 @@ pub fn lock_payout(
         return Err(ContractError::InvalidState);
     }
 
+    let now = env.ledger().timestamp();
+    if now > record.unlocks_at {
+        return Err(ContractError::NotYetUnlocked);
+    }
+
     token::Client::new(env, token).transfer(holder, &env.current_contract_address(), &amount);
 
-    let now = env.ledger().timestamp();
     record.holder = holder.clone();
     record.token = token.clone();
     record.amount = amount;
     record.locked_at = now;
 
     let ledger_sequence = env.ledger().sequence();
-    record.unlocks_at_ledger = ledger_sequence
-        .checked_add((record.unlocks_at - now) as u32 / 5)
-        .unwrap_or(u32::MAX);
+    let remaining_ledgers = record.unlocks_at.saturating_sub(now) / 5;
+    let ledger_delta =
+        u32::try_from(remaining_ledgers.min(u64::from(u32::MAX))).unwrap_or(u32::MAX);
+    record.unlocks_at_ledger = ledger_sequence.saturating_add(ledger_delta);
 
     env.storage().persistent().set(&key, &record);
     Ok(())
@@ -435,6 +440,20 @@ mod tests {
         lock_payout(&env, 1, 0, &admin, &payout_token, 5_000).unwrap();
         let err = lock_payout(&env, 1, 0, &admin, &payout_token, 3_000);
         assert_eq!(err, Err(ContractError::InvalidState));
+    }
+
+    #[test]
+    fn lock_payout_after_unlocks_at_rejected() {
+        let (env, admin, owner) = setup();
+        attach_lockup(&env, &owner, 1, 0, 100).unwrap();
+        set_ledger(&env, 1200, 140);
+        let payout_token = funded_token(&env, &admin);
+        let err = lock_payout(&env, 1, 0, &admin, &payout_token, 5_000);
+        assert_eq!(err, Err(ContractError::NotYetUnlocked));
+
+        let record = get_lockup(&env, 1, 0).unwrap();
+        assert_eq!(record.amount, 0);
+        assert_eq!(record.unlocks_at_ledger, 0);
     }
 
     // ── release ───────────────────────────────────────────────────────────
