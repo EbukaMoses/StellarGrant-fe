@@ -96,6 +96,7 @@ pub enum UserKey {
 pub enum VotingKey {
     VoiceCredits(Address, u64),
     Mechanism(u64),
+    QuorumThreshold(u64),
     QvVotes(u64, u32),
     MultisigSigners(u64),
     ReleaseApproval(u64, Address),

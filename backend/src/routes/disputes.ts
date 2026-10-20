@@ -8,7 +8,8 @@ import { RbacService } from "../services/rbac-service";
 import { SignatureService } from "../services/signature-service";
 import { WebhookDispatcher } from "../services/webhook-dispatcher";
 import { walletLimiters } from "../middlewares/rate-limiter";
-import { authMiddleware } from "../middlewares/auth-middleware";
+import { buildAuthMiddleware } from "../middlewares/auth-middleware";
+import { NonceService } from "../services/nonce-service";
 import type { AuthenticatedRequest } from "../types/auth";
 
 const MAX_SKEW_MS = 5 * 60 * 1000;
@@ -42,8 +43,10 @@ export const buildDisputesRouter = (
   rbacService: RbacService,
   webhookDispatcher: WebhookDispatcher,
   signatureService: SignatureService,
+  nonceService: NonceService,
 ) => {
   const router = Router();
+  const authMiddleware = buildAuthMiddleware(signatureService, nonceService);
   const disputeRepo: Repository<Dispute> = dataSource.getRepository(Dispute);
   const grantRepo: Repository<Grant> = dataSource.getRepository(Grant);
   const milestoneRepo: Repository<Milestone> =
@@ -116,7 +119,7 @@ export const buildDisputesRouter = (
   // POST /disputes/:id/argument — submit contributor or funder argument
   router.post(
     "/:id/argument",
-    authMiddleware as any,
+    authMiddleware,
     walletLimiters.disputeArgument,
     async (req: AuthenticatedRequest, res, next) => {
       try {

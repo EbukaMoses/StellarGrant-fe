@@ -643,6 +643,25 @@ impl Storage {
             .set(&DataKey::Voting(VotingKey::Mechanism(grant_id)), mechanism);
     }
 
+    pub fn get_grant_quorum_threshold(env: &Env, grant_id: u64) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Voting(VotingKey::QuorumThreshold(grant_id)))
+            .unwrap_or_else(|| {
+                // Fallback to protocol config if grant-specific threshold not set
+                let cfg = Self::get_protocol_config(env);
+                cfg.unwrap_or_else(crate::config::default_config)
+                    .quorum_threshold_bps
+            })
+    }
+
+    pub fn set_grant_quorum_threshold(env: &Env, grant_id: u64, threshold_bps: u32) {
+        env.storage().persistent().set(
+            &DataKey::Voting(VotingKey::QuorumThreshold(grant_id)),
+            &threshold_bps,
+        );
+    }
+
     pub fn get_qv_votes(env: &Env, grant_id: u64, milestone_idx: u32) -> Vec<QuadraticVoteRecord> {
         env.storage()
             .persistent()

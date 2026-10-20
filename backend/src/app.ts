@@ -171,7 +171,7 @@ export const createApp = (
       webhookDispatcher,
     ),
   );
-  app.use("/notifications", buildNotificationsRouter(contributorRepo));
+  app.use("/notifications", buildNotificationsRouter(contributorRepo, signatureService, nonceService));
   app.use(
     "/contributors",
     buildContributorsRouter(
@@ -181,7 +181,7 @@ export const createApp = (
       activityRepo,
     ),
   );
-  app.use("/ipfs", buildIpfsPresignRouter());
+  app.use("/ipfs", buildIpfsPresignRouter(signatureService, nonceService));
   app.use("/events", buildEventsRouter(activityRepo));
   app.use(
     "/webhooks",
@@ -211,7 +211,7 @@ export const createApp = (
     "/milestone_approvals",
     buildMilestoneApprovalRouter(approvalRepo, grantRepo, reviewerRepo, signatureService, nonceService),
   );
-  app.use("/disputes", buildDisputesRouter(dataSource, rbacService, webhookDispatcher));
+  app.use("/disputes", buildDisputesRouter(dataSource, rbacService, webhookDispatcher, signatureService, nonceService));
   app.use("/", buildGrantDisputesRouter(dataSource));
   app.use(
     "/",

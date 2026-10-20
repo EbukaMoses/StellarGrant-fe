@@ -143,9 +143,10 @@ pub fn cast_vote(
     // Use the snapshotted reviewer count from submission time to prevent
     // quorum miscalculation when reviewers are added/removed mid-vote (#624).
     let total_weight = milestone.reviewer_count_snapshot;
+    let threshold_bps = Storage::get_grant_quorum_threshold(env, grant.id);
 
-    let approval_quorum = quorum_reached(milestone.approvals, total_weight);
-    let rejection_quorum = quorum_reached(milestone.rejections, total_weight);
+    let approval_quorum = quorum_reached(milestone.approvals, total_weight, threshold_bps);
+    let rejection_quorum = quorum_reached(milestone.rejections, total_weight, threshold_bps);
     let vote_finalized = approval_quorum || rejection_quorum;
 
     let total_votes = milestone.approvals + milestone.rejections;
@@ -194,12 +195,13 @@ pub fn cast_vote(
 }
 
 /// Compute whether quorum is reached given current approvals and total reviewers.
-/// Quorum = strictly more than 50% of reviewers approved.
-pub fn quorum_reached(approvals: u32, total_reviewers: u32) -> bool {
+/// Quorum = approvals must meet or exceed the configured threshold (in basis points).
+pub fn quorum_reached(approvals: u32, total_reviewers: u32, threshold_bps: u32) -> bool {
     if total_reviewers == 0 {
         return false;
     }
-    approvals * 2 > total_reviewers
+    (approvals as u64).saturating_mul(10_000)
+        >= (total_reviewers as u64).saturating_mul(threshold_bps as u64)
 }
 
 /// Compute the approval percentage (0-100) from votes cast.
@@ -227,35 +229,84 @@ mod tests {
 
     #[test]
     fn test_quorum_zero_reviewers() {
-        assert!(!quorum_reached(0, 0));
-        assert!(!quorum_reached(1, 0));
+        assert!(!quorum_reached(0, 0, 5001));
+        assert!(!quorum_reached(1, 0, 5001));
     }
 
     #[test]
     fn test_quorum_single_reviewer() {
-        assert!(quorum_reached(1, 1)); // 1/1 = 100%
-        assert!(!quorum_reached(0, 1)); // 0/1 = 0%
+        assert!(quorum_reached(1, 1, 5001)); // 1/1 = 100%
+        assert!(!quorum_reached(0, 1, 5001)); // 0/1 = 0%
     }
 
     #[test]
     fn test_quorum_exact_50_percent_not_reached() {
-        assert!(!quorum_reached(1, 2)); // exactly 50%, needs strictly more
-        assert!(!quorum_reached(2, 4)); // exactly 50%
+        assert!(!quorum_reached(1, 2, 5001)); // 50% < 50.01%
+        assert!(!quorum_reached(2, 4, 5001)); // 50% < 50.01%
     }
 
     #[test]
     fn test_quorum_51_percent_reached() {
-        assert!(quorum_reached(2, 3)); // 66% > 50%
-        assert!(quorum_reached(3, 4)); // 75% > 50%
-        assert!(quorum_reached(3, 5)); // 60% > 50%
+        assert!(quorum_reached(2, 3, 5001)); // 66% > 50%
+        assert!(quorum_reached(3, 4, 5001)); // 75% > 50%
+        assert!(quorum_reached(3, 5, 5001)); // 60% > 50%
     }
 
     #[test]
     fn test_quorum_all_reject_path() {
         // If all reject, 0 approvals → no approval quorum
-        assert!(!quorum_reached(0, 3));
-        // But rejection quorum check: quorum_reached(3, 3) = true
-        assert!(quorum_reached(3, 3));
+        assert!(!quorum_reached(0, 3, 5001));
+        // But rejection quorum check: quorum_reached(3, 3, 5001) = true
+        assert!(quorum_reached(3, 3, 5001));
+    }
+
+    #[test]
+    fn test_quorum_75_percent_threshold() {
+        // ProtocolIntegration requires >=75% (7500 bps)
+        assert!(!quorum_reached(2, 4, 7500)); // 50% < 75%
+        assert!(!quorum_reached(2, 3, 7500)); // 66% < 75%
+        assert!(quorum_reached(3, 4, 7500)); // 75% >= 75%
+        assert!(quorum_reached(4, 4, 7500)); // 100% >= 75%
+    }
+
+    #[test]
+    fn test_protocol_integration_grant_honors_75_percent_threshold() {
+        // Issue #1156: Test that ProtocolIntegration grants require 75% approval,
+        // not the hardcoded 50% that was previously used.
+        let env = soroban_sdk::Env::default();
+        let contract_id = env.register(crate::StellarGrantsContract, ());
+
+        env.as_contract(&contract_id, || {
+            let owner = soroban_sdk::Address::generate(&env);
+            let token = soroban_sdk::Address::generate(&env);
+            let mut reviewers = soroban_sdk::Vec::new(&env);
+            for _ in 0..4 {
+                reviewers.push_back(soroban_sdk::Address::generate(&env));
+            }
+
+            // Create a ProtocolIntegration grant (requires 75% threshold)
+            let grant_id = crate::factory::create_from_template(
+                &env,
+                &owner,
+                crate::types::GrantArchetype::ProtocolIntegration,
+                soroban_sdk::String::from_str(&env, "Protocol Integration"),
+                soroban_sdk::String::from_str(&env, "Test"),
+                &token,
+                1000,
+                reviewers,
+            )
+            .unwrap();
+
+            // Verify the stored threshold is 7500 bps (75%)
+            let stored_threshold = Storage::get_grant_quorum_threshold(&env, grant_id);
+            assert_eq!(stored_threshold, 7500);
+
+            // With 4 reviewers, 51% (2/4) should NOT reach quorum
+            assert!(!quorum_reached(2, 4, stored_threshold));
+
+            // With 4 reviewers, 75% (3/4) SHOULD reach quorum (>= 75%)
+            assert!(quorum_reached(3, 4, stored_threshold));
+        });
     }
 
     #[test]

@@ -8,6 +8,11 @@ export class NotificationService {
   private userSockets: Map<string, string[]> = new Map();
 
   initialize(server: HttpServer): void {
+    // Issue #1195: Require JWT_SECRET to be set at startup
+    if (!env.jwtSecret || env.jwtSecret.trim() === "") {
+      throw new Error("JWT_SECRET must be set to a non-empty value for WebSocket authentication");
+    }
+
     this.io = new SocketServer(server, {
       cors: {
         origin: env.corsOrigins,
@@ -17,34 +22,40 @@ export class NotificationService {
     });
 
     this.io.on("connection", (socket: Socket) => {
-      // Authenticate by JWT token (preferred) or by `address` query param.
+      // Authenticate by JWT token only - no query param fallback
       let address: string | undefined;
 
       try {
         const token = (socket.handshake.auth && (socket.handshake.auth as any).token) ||
           (socket.handshake.headers && socket.handshake.headers.authorization && String(socket.handshake.headers.authorization).replace(/^Bearer\s+/i, ""));
-        if (token) {
-          if (!env.jwtSecret) {
-            console.warn("JWT_SECRET not set; accepting websocket connection without verification");
+
+        if (!token) {
+          console.warn(`WebSocket connection rejected: no token provided for socket ${socket.id}`);
+          socket.disconnect(true);
+          return;
+        }
+
+        try {
+          const decoded = jwt.verify(token, env.jwtSecret);
+          if (decoded && (decoded as any).stellarAddress) {
+            address = (decoded as any).stellarAddress;
+          } else {
+            console.warn(`WebSocket connection rejected: invalid token payload for socket ${socket.id}`);
+            socket.disconnect(true);
+            return;
           }
-          try {
-            const decoded = token && env.jwtSecret ? jwt.verify(token, env.jwtSecret) : null;
-            if (decoded && (decoded as any).stellarAddress) {
-              address = (decoded as any).stellarAddress;
-            }
-          } catch (e) {
-            console.warn("WebSocket token verification failed", e);
-          }
+        } catch (e) {
+          console.warn(`WebSocket connection rejected: token verification failed for socket ${socket.id}`, e);
+          socket.disconnect(true);
+          return;
         }
       } catch (e) {
-        console.warn("WebSocket auth parse error", e);
+        console.warn(`WebSocket auth parse error for socket ${socket.id}`, e);
+        socket.disconnect(true);
+        return;
       }
 
-      // fallback to query.address when token didn't provide it
-      if (!address) {
-        address = socket.handshake.query.address as string | undefined;
-      }
-
+      // Only proceed if we have a verified address
       if (address) {
         const sockets = this.userSockets.get(address) || [];
         sockets.push(socket.id);
@@ -63,8 +74,8 @@ export class NotificationService {
           console.log(`User ${address} disconnected socket ${socket.id}`);
         });
       } else {
-        console.log(`Anonymous socket ${socket.id} connected`);
-        socket.on("disconnect", () => console.log(`Anonymous socket ${socket.id} disconnected`));
+        console.warn(`WebSocket connection rejected: no address in verified token for socket ${socket.id}`);
+        socket.disconnect(true);
       }
     });
   }

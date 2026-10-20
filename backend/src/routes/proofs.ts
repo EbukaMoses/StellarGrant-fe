@@ -1,19 +1,13 @@
 import { Router } from "express";
 import multer from "multer";
 import { IpfsService } from "../services/ipfs-service";
-import { authMiddleware } from "../middlewares/auth-middleware";
+import { buildAuthMiddleware } from "../middlewares/auth-middleware";
+import { SignatureService } from "../services/signature-service";
+import { NonceService } from "../services/nonce-service";
 import { createWalletRateLimiter } from "../middlewares/rate-limiter";
 import type { AuthenticatedRequest } from "../types/auth";
 
 const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50 MB
-
-// 20 uploads per authenticated wallet per hour. Keyed off the session identity,
-// not a client-supplied field, so it cannot be rotated to bypass the limit.
-const uploadRateLimiter = createWalletRateLimiter(
-  60 * 60 * 1000,
-  20,
-  (req) => (req as AuthenticatedRequest).user?.stellarAddress ?? null,
-);
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -36,8 +30,21 @@ const upload = multer({
   },
 });
 
-export const buildProofsRouter = (ipfsService: IpfsService) => {
+export const buildProofsRouter = (
+  ipfsService: IpfsService,
+  signatureService: SignatureService,
+  nonceService: NonceService,
+) => {
   const router = Router();
+  const authMiddleware = buildAuthMiddleware(signatureService, nonceService);
+
+  // 20 uploads per authenticated wallet per hour. Keyed off the session identity,
+  // not a client-supplied field, so it cannot be rotated to bypass the limit.
+  const uploadRateLimiter = createWalletRateLimiter(
+    60 * 60 * 1000,
+    20,
+    (req) => (req as AuthenticatedRequest).user?.stellarAddress ?? null,
+  );
 
   /**
    * POST /proofs/upload
@@ -46,7 +53,7 @@ export const buildProofsRouter = (ipfsService: IpfsService) => {
    */
   router.post(
     "/upload",
-    authMiddleware as any,
+    authMiddleware,
     uploadRateLimiter,
     upload.single("file"),
     async (req, res, next) => {
