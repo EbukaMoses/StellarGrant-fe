@@ -9,6 +9,8 @@ use crate::types::{
     MilestoneState,
 };
 
+const MAX_BATCH_CANCEL_FUNDERS_PER_GRANT: u32 = constants::MAX_BATCH_CANCEL_FUNDERS_PER_GRANT;
+
 fn validate_batch_size(len: u32) -> Result<(), ContractError> {
     if len == 0 {
         return Err(ContractError::BatchEmpty);
@@ -146,6 +148,7 @@ fn try_fund_grant(
     grant_id: u64,
     amount: i128,
 ) -> Result<(), ContractError> {
+    crate::reentrancy::protect(env)?;
     if amount <= 0 {
         return Err(ContractError::InvalidInput);
     }
@@ -187,14 +190,17 @@ fn try_fund_grant(
         });
     }
 
-    let token_client = token::Client::new(env, &grant.token);
-    let contract_address = env.current_contract_address();
-    token_client.transfer(funder, &contract_address, &amount);
-
     grant.escrow_balance = new_escrow_balance;
     grant.funders = funders;
-
     Storage::set_grant(env, grant_id, &grant);
+
+    let token_client = token::Client::new(env, &grant.token);
+    let contract_address = env.current_contract_address();
+    crate::reentrancy::protect_external_call(env, || {
+        token_client.transfer(funder, &contract_address, &amount);
+        Ok(())
+    })?;
+
     Events::emit_grant_funded(env, grant_id, funder.clone(), amount, grant.escrow_balance);
 
     Ok(())
@@ -211,6 +217,23 @@ pub fn batch_cancel_grants(
     validate_batch_size(batch_len)?;
 
     caller.require_auth();
+
+    let mut total_nested_funders = 0u32;
+    for grant_id in grant_ids.iter() {
+        if let Some(grant) = Storage::get_grant(env, grant_id) {
+            if grant.funders.len() > MAX_BATCH_CANCEL_FUNDERS_PER_GRANT {
+                return Err(ContractError::BatchTooLarge);
+            }
+            total_nested_funders = total_nested_funders
+                .checked_add(grant.funders.len())
+                .ok_or(ContractError::BatchTooLarge)?;
+            if total_nested_funders
+                > (constants::MAX_BATCH_SIZE * MAX_BATCH_CANCEL_FUNDERS_PER_GRANT)
+            {
+                return Err(ContractError::BatchTooLarge);
+            }
+        }
+    }
 
     let mut results = Vec::new(env);
     for (index, grant_id) in grant_ids.iter().enumerate() {
@@ -230,7 +253,12 @@ pub fn try_cancel_grant(
     grant_id: u64,
     reason: &String,
 ) -> Result<(), ContractError> {
+    crate::reentrancy::protect(env)?;
+
     let mut grant = Storage::get_grant(env, grant_id).ok_or(ContractError::GrantNotFound)?;
+    if grant.funders.len() > MAX_BATCH_CANCEL_FUNDERS_PER_GRANT {
+        return Err(ContractError::BatchTooLarge);
+    }
 
     let caller_is_owner = grant.owner == *caller;
     let caller_is_admin = Storage::get_global_admin(env) == Some(caller.clone());
@@ -247,6 +275,12 @@ pub fn try_cancel_grant(
     }
 
     let total_refundable = grant.escrow_balance;
+    grant.status = GrantStatus::Cancelled;
+    grant.escrow_balance = 0;
+    grant.reason = Some(reason.clone());
+    grant.timestamp = env.ledger().timestamp();
+    Storage::set_grant(env, grant_id, &grant);
+
     if total_refundable > 0 {
         let mut total_contributions: i128 = 0;
         for fund_entry in grant.funders.iter() {
@@ -280,22 +314,19 @@ pub fn try_cancel_grant(
             };
 
             if refund_amount > 0 {
-                token_client.transfer(
-                    &env.current_contract_address(),
-                    &fund_entry.funder,
-                    &refund_amount,
-                );
+                crate::reentrancy::protect_external_call(env, || {
+                    token_client.transfer(
+                        &env.current_contract_address(),
+                        &fund_entry.funder,
+                        &refund_amount,
+                    );
+                    Ok(())
+                })?;
                 Events::emit_refund_issued(env, grant_id, fund_entry.funder.clone(), refund_amount);
             }
         }
     }
 
-    grant.status = GrantStatus::Cancelled;
-    grant.escrow_balance = 0;
-    grant.reason = Some(reason.clone());
-    grant.timestamp = env.ledger().timestamp();
-
-    Storage::set_grant(env, grant_id, &grant);
     Events::emit_grant_cancelled(
         env,
         grant_id,
@@ -400,6 +431,64 @@ mod tests {
         assert_eq!(result, Ok(()));
         let result = validate_batch_size(constants::MAX_BATCH_SIZE);
         assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn test_try_cancel_grant_rejects_reentry() {
+        let (env, contract_id) = setup_contract_env();
+        env.as_contract(&contract_id, || {
+            let owner = Address::generate(&env);
+            let token = Address::generate(&env);
+            create_grant(&env, 1, &owner, &token);
+            env.storage()
+                .temporary()
+                .set(&crate::reentrancy::ReentrancyKey::ExternalCallGuard, &());
+
+            let reason = String::from_str(&env, "reentry");
+            assert_eq!(
+                try_cancel_grant(&env, &owner, 1, &reason),
+                Err(ContractError::Reentrancy)
+            );
+        });
+    }
+
+    #[test]
+    fn test_batch_cancel_grants_rejects_too_many_funders_per_grant() {
+        let (env, contract_id) = setup_contract_env();
+        env.as_contract(&contract_id, || {
+            let owner = Address::generate(&env);
+            let token = Address::generate(&env);
+            let mut grant = crate::types::Grant {
+                id: 1,
+                owner: owner.clone(),
+                title: String::from_str(&env, "Test Grant"),
+                description: String::from_str(&env, "Description"),
+                token: token.clone(),
+                status: GrantStatus::Active,
+                total_amount: 100_000,
+                milestone_amount: 50_000,
+                reviewers: Vec::new(&env),
+                total_milestones: 3,
+                milestones_paid_out: 0,
+                escrow_balance: 0,
+                funders: Vec::new(&env),
+                reason: None,
+                timestamp: env.ledger().timestamp(),
+                require_compliance: None,
+            };
+            for _ in 0..(constants::MAX_BATCH_CANCEL_FUNDERS_PER_GRANT + 1) {
+                grant.funders.push_back(GrantFund {
+                    funder: Address::generate(&env),
+                    amount: 10,
+                });
+            }
+            Storage::set_grant(&env, 1, &grant);
+
+            let grant_ids = Vec::from_array(&env, [1u64]);
+            let result =
+                batch_cancel_grants(&env, &owner, grant_ids, String::from_str(&env, "too many"));
+            assert_eq!(result, Err(ContractError::BatchTooLarge));
+        });
     }
 
     // ── build_batch_result ───────────────────────────────────────────────

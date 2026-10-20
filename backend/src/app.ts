@@ -68,7 +68,9 @@ import { buildStatsRouter } from "./routes/stats";
 import { buildWatchlistRouter } from "./routes/watchlist";
 import { GrantView } from "./entities/GrantView";
 import { UserWatchlist } from "./entities/UserWatchlist";
+import { WebhookSubscription } from "./entities/WebhookSubscription";
 import { IpfsService } from "./services/ipfs-service";
+import { buildWebhooksRouter } from "./routes/webhooks";
 
 export const createApp = (
   dataSource: DataSource,
@@ -107,6 +109,7 @@ export const createApp = (
   const feedbackRepo = dataSource.getRepository(GrantFeedback);
   const grantViewRepo = dataSource.getRepository(GrantView);
   const watchlistRepo = dataSource.getRepository(UserWatchlist);
+  const webhookSubscriptionRepo = dataSource.getRepository(WebhookSubscription);
 
   const grantSyncService = new GrantSyncService(dataSource, sorobanClient);
   const signatureService = new SignatureService();
