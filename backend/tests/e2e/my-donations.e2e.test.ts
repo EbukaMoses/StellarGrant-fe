@@ -4,18 +4,9 @@ import { DataSource } from "typeorm";
 import { Keypair } from "@stellar/stellar-sdk";
 import { signedUserHeaders } from "../helpers/sign-user";
 import { createApp } from "../../src/app";
-import { DataSourceOptions } from "typeorm";
+import { buildDataSource } from "../../src/db/data-source";
 import { FeeCollection } from "../../src/entities/FeeCollection";
 import { Grant } from "../../src/entities/Grant";
-import { MilestoneProof } from "../../src/entities/MilestoneProof";
-import { GrantReviewer } from "../../src/entities/GrantReviewer";
-import { Milestone } from "../../src/entities/Milestone";
-import { Contributor } from "../../src/entities/Contributor";
-import { User } from "../../src/entities/User";
-import { MilestoneApproval } from "../../src/entities/MilestoneApproval";
-import { Community } from "../../src/entities/Community";
-import { Role } from "../../src/entities/Role";
-import { UserRole } from "../../src/entities/UserRole";
 
 const TEST_KEY = Keypair.random();
 const OTHER_KEY = Keypair.random();
@@ -30,6 +21,7 @@ async function seedDonations(ds: DataSource) {
     id: 1,
     title: "Test Grant",
     status: "active",
+    owner: TEST_ADDRESS,
     recipient: "GRECIPIENT1",
     totalAmount: "1000",
     tags: null,
@@ -75,15 +67,7 @@ describe("GET /my-donations", () => {
   let app: ReturnType<typeof createApp>;
 
   beforeAll(async () => {
-    // Custom DataSource with FeeCollection included
-    const options: DataSourceOptions = {
-      type: "sqljs",
-      location: "memory",
-      autoSave: false,
-      entities: [Grant, Community, Milestone, FeeCollection, MilestoneProof, GrantReviewer, Contributor, User, MilestoneApproval, Role, UserRole],
-      synchronize: true,
-    };
-    dataSource = new DataSource(options);
+    dataSource = buildDataSource("sqljs://memory");
     await dataSource.initialize();
     await seedDonations(dataSource);
     app = createApp(dataSource, {} as any);

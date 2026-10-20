@@ -121,9 +121,9 @@ function extractFunctionName(envelopeXdr?: string): string | undefined {
   if (!envelopeXdr) return undefined;
   try {
     const env = xdr.TransactionEnvelope.fromXDR(Buffer.from(envelopeXdr, "base64"));
-    // Support both V0 and V1 envelopes
-    const txEnvelope = env.switch().value() as xdr.TransactionV1Envelope;
-    const tx = txEnvelope.tx();
+    // Soroban invoke-host-function operations are only present in V1 envelopes.
+    if (env.switch().name !== "envelopeTypeTx") return undefined;
+    const tx = env.v1().tx();
     const ops = tx.operations();
     const contractId = getContractId();
     if (!contractId) return undefined;
@@ -132,17 +132,19 @@ function extractFunctionName(envelopeXdr?: string): string | undefined {
       const body = op.body();
       // The operation type enum name for invokeHostFunction is "invokeHostFunction"
       if (body.switch().name === "invokeHostFunction") {
-        const invoke = body.invokeHostFunction();
+        const invoke = body.invokeHostFunctionOp();
+        const hostFunction = invoke.hostFunction();
+        if (hostFunction.switch().name !== "hostFunctionTypeInvokeContract") continue;
+        const invocation = hostFunction.invokeContract();
+        const address = invocation.contractAddress();
+        if (address.switch().name !== "scAddressTypeContract") continue;
         // Compare contract IDs (hex string without 0x prefix)
-        const opContractId = invoke.contractId().toString("hex");
+        const opContractId = address.contractId().toString("hex");
         if (opContractId !== contractId) continue;
-        const fn = invoke.function();
-        if (fn) {
-          // fn is of type ScSymbol (Soroban); get its string representation
-          // ScSymbol is an XDR type with a .symbol() accessor returning the raw bytes.
-          // Use toString() to get UTF‑8 string.
-          return fn.toString();
-        }
+        const functionName = invocation.functionName();
+        return typeof functionName === "string"
+          ? functionName
+          : functionName.toString("utf8");
       }
     }
   } catch (_) {
