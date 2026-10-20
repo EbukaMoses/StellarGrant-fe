@@ -2,7 +2,9 @@ import { Router } from "express";
 import { Repository } from "typeorm";
 import { z } from "zod";
 import { Contributor } from "../entities/Contributor";
-import { authMiddleware } from "../middlewares/auth-middleware";
+import { buildAuthMiddleware } from "../middlewares/auth-middleware";
+import { SignatureService } from "../services/signature-service";
+import { NonceService } from "../services/nonce-service";
 import type { AuthenticatedRequest } from "../types/auth";
 import type { Request as ExpressRequest } from "express";
 
@@ -12,14 +14,19 @@ const prefsSchema = z.object({
   emailNotifications: z.boolean(),
 });
 
-export const buildNotificationsRouter = (contributorRepo: Repository<Contributor>) => {
+export const buildNotificationsRouter = (
+  contributorRepo: Repository<Contributor>,
+  signatureService: SignatureService,
+  nonceService: NonceService,
+) => {
   const router = Router();
+  const authMiddleware = buildAuthMiddleware(signatureService, nonceService);
 
   /**
    * PUT /notifications/preferences
    * Opt-in or opt-out of email notifications for a given Stellar address.
    */
-  router.put("/preferences", authMiddleware as any, async (req: any, res, next) => {
+  router.put("/preferences", authMiddleware, async (req: any, res, next) => {
     try {
       const parsed = prefsSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -57,7 +64,7 @@ export const buildNotificationsRouter = (contributorRepo: Repository<Contributor
    * Returns the current notification preferences for an address.
    * Requires authentication and proof of address ownership.
    */
-  router.get("/preferences/:address", authMiddleware as any, async (req: any, res, next) => {
+  router.get("/preferences/:address", authMiddleware, async (req: any, res, next) => {
     try {
       const { address } = req.params;
 

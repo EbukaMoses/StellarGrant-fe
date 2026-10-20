@@ -7,7 +7,9 @@
 
 import { Router, Response } from "express";
 import { z } from "zod";
-import { authMiddleware } from "../middlewares/auth-middleware";
+import { buildAuthMiddleware } from "../middlewares/auth-middleware";
+import { SignatureService } from "../services/signature-service";
+import { NonceService } from "../services/nonce-service";
 import { createWalletRateLimiter } from "../middlewares/rate-limiter";
 import { ipfsService } from "../services/ipfs-service";
 import type { AuthenticatedRequest } from "../types/auth";
@@ -16,17 +18,21 @@ const verifyBody = z.object({
   cid: z.string().min(10).max(100),
 });
 
-// 10 presign requests per authenticated wallet per hour — see issue spec (rate-limit 10/hr).
-// The key is derived from the authenticated session identity (set by authMiddleware),
-// never from a client-supplied body field, so it cannot be spoofed.
-const presignRateLimiter = createWalletRateLimiter(
-  60 * 60 * 1000,
-  10,
-  (req) => (req as AuthenticatedRequest).user?.stellarAddress ?? null,
-);
-
-export function buildIpfsPresignRouter(): Router {
+export function buildIpfsPresignRouter(
+  signatureService: SignatureService,
+  nonceService: NonceService,
+): Router {
   const router = Router();
+  const authMiddleware = buildAuthMiddleware(signatureService, nonceService);
+
+  // 10 presign requests per authenticated wallet per hour — see issue spec (rate-limit 10/hr).
+  // The key is derived from the authenticated session identity (set by authMiddleware),
+  // never from a client-supplied body field, so it cannot be spoofed.
+  const presignRateLimiter = createWalletRateLimiter(
+    60 * 60 * 1000,
+    10,
+    (req) => (req as AuthenticatedRequest).user?.stellarAddress ?? null,
+  );
 
   /**
    * POST /ipfs/presign
@@ -39,7 +45,7 @@ export function buildIpfsPresignRouter(): Router {
    */
   router.post(
     "/presign",
-    authMiddleware as any,
+    authMiddleware,
     presignRateLimiter,
     async (req: AuthenticatedRequest, res: Response) => {
       try {
@@ -66,7 +72,7 @@ export function buildIpfsPresignRouter(): Router {
    */
   router.post(
     "/verify",
-    authMiddleware as any,
+    authMiddleware,
     async (req: any, res: Response) => {
       try {
         const body = verifyBody.safeParse(req.body);

@@ -4,6 +4,7 @@ import { Keypair } from "@stellar/stellar-sdk";
 import { describe, expect, it, vi } from "vitest";
 import { buildAdminMiddleware } from "../../src/middlewares/admin-middleware";
 import { buildSignedUserAuth } from "../../src/middlewares/signed-user-auth";
+import { buildAuthMiddleware } from "../../src/middlewares/auth-middleware";
 import { createRbacMiddleware } from "../../src/middlewares/rbac-middleware";
 import { buildMyDonationsRouter } from "../../src/routes/my-donations";
 import { buildGrantDraftsRouter } from "../../src/routes/grant-drafts";
@@ -158,5 +159,58 @@ describe("GET /my-donations (#1207)", () => {
     const headers = signedUserHeaders(funder, "GET", "/my-donations");
     await request(app).get("/my-donations").set(headers).expect(200);
     await request(app).get("/my-donations").set(headers).expect(401);
+  });
+});
+
+describe("authMiddleware signature verification (#1194)", () => {
+  const user = Keypair.random();
+  const build = () => {
+    const auth = buildAuthMiddleware(signatureService, memoryNonceService());
+    const app = express();
+    app.use(express.json());
+    app.use(auth);
+    app.get("/protected", (_req, res) => res.json({ ok: true }));
+    app.use(errorHandler);
+    return app;
+  };
+
+  it("rejects a request with missing authentication headers", async () => {
+    const app = build();
+    await request(app).get("/protected").expect(401);
+  });
+
+  it("rejects a forged header without a valid signature", async () => {
+    const app = build();
+    await request(app)
+      .get("/protected")
+      .set("x-stellar-address", user.publicKey())
+      .expect(401);
+  });
+
+  it("rejects a request with valid signature but wrong address in header", async () => {
+    const app = build();
+    const headers = signedUserHeaders(user, "GET", "/protected");
+    await request(app)
+      .get("/protected")
+      .set("x-stellar-address", Keypair.random().publicKey())
+      .set("x-stellar-signature", headers["x-stellar-signature"])
+      .set("x-stellar-nonce", headers["x-stellar-nonce"])
+      .set("x-stellar-timestamp", headers["x-stellar-timestamp"])
+      .expect(401);
+  });
+
+  it("accepts a legitimately signed request", async () => {
+    const app = build();
+    await request(app)
+      .get("/protected")
+      .set(signedUserHeaders(user, "GET", "/protected"))
+      .expect(200);
+  });
+
+  it("rejects a replayed signature", async () => {
+    const app = build();
+    const headers = signedUserHeaders(user, "GET", "/protected");
+    await request(app).get("/protected").set(headers).expect(200);
+    await request(app).get("/protected").set(headers).expect(401);
   });
 });
