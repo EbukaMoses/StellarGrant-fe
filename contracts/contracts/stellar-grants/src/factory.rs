@@ -142,6 +142,7 @@ pub fn create_from_custom_template(
     )?;
 
     Storage::set_voting_mechanism(env, grant_id, &template.voting_mechanism);
+    Storage::set_grant_quorum_threshold(env, grant_id, template.quorum_threshold_bps);
 
     // Issue #912: persist the archetype's safety flags so they are actually
     // enforced (staking, multisig, insurance) rather than discarded.
