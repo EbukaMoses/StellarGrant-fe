@@ -1,3 +1,3 @@
-// The SQL.js test driver uses SQLite's datetime type; PostgreSQL uses timestamp.
-export const timestampColumnType =
-  process.env.NODE_ENV === "test" ? "datetime" : "timestamp";
+// "timestamp" is valid for both PostgreSQL and SQLite (better-sqlite3).
+// "datetime" is SQLite-only and rejected by PostgreSQL, so we never use it.
+export const timestampColumnType = "timestamp";
