@@ -38,9 +38,9 @@ describe("Grant Flow Integration (Testcontainers)", () => {
 
   it("syncs contributor scores and updates reputation correctly", async () => {
     const syncService = new GrantSyncService(dataSource, sorobanClient);
-    const recipient = "GBRPYHIL2C2WBO36G6UIGR2PA4M3TQ7VOY3RTMAL4LRRA67ZOHQ65SZD"; // Grant #1 recipient
+    const recipient = "GDATAPRIVACYRECPNT0000000000000000000000000000000000000"; // Grant #3 recipient (status: completed)
 
-    await syncService.syncGrant(1);
+    await syncService.syncGrant(3);
 
     const contributorRepo = dataSource.getRepository(Contributor);
     const contributor = await contributorRepo.findOne({ where: { address: recipient } });

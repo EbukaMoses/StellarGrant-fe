@@ -4,7 +4,7 @@ const mockGrants: SorobanGrant[] = [
   {
     id: 1,
     title: "Open Source Grants Q2",
-    status: "completed",
+    status: "active",
     recipient: "GBRPYHIL2C2WBO36G6UIGR2PA4M3TQ7VOY3RTMAL4LRRA67ZOHQ65SZD",
     totalAmount: "250000000",
     owner: "GOWNEREXAMPLEADDRESS0000000000000000000000000000000000",
