@@ -15,7 +15,7 @@ export class Notification {
   @Column({ type: "simple-json" })
   payload!: Record<string, unknown>;
 
-  @Column({ type: "timestamp", nullable: true })
+  @Column({ type: "datetime", nullable: true })
   readAt!: Date | null;
 
   @CreateDateColumn()

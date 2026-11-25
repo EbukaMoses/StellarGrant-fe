@@ -465,14 +465,14 @@ mod tests {
 
     // ── Overflow / checked-math tests ────────────────────────────────────────
 
-    /// epoch_bounds: when epoch_id is so large that start_at would overflow u64,
-    /// the helper clamps to u64::MAX rather than wrapping.
+    /// epoch_bounds: u32::MAX * EPOCH_DURATION_SECONDS fits in u64 (no overflow).
+    /// Verify the actual computed start and end timestamps are correct.
     #[test]
     fn test_epoch_bounds_overflow_clamps_to_max() {
-        // u32::MAX * EPOCH_DURATION_SECONDS overflows u64
+        // u32::MAX * 604_800 = 2_597_596_220_016_000, which is well within u64::MAX.
         let (start, end) = epoch_bounds(u32::MAX);
-        assert_eq!(start, u64::MAX);
-        assert_eq!(end, u64::MAX);
+        assert_eq!(start, u32::MAX as u64 * EPOCH_DURATION_SECONDS);
+        assert_eq!(end, u32::MAX as u64 * EPOCH_DURATION_SECONDS + EPOCH_DURATION_SECONDS);
     }
 
     /// epoch_bounds: a normal epoch_id produces the expected timestamps.

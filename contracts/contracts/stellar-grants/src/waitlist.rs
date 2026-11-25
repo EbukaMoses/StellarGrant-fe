@@ -980,7 +980,7 @@ mod tests {
                 assert_eq!(join(&env, &applicant, 1), Err(ContractError::WaitlistFull));
             });
             env.as_contract(&contract_id, || {
-                assert_eq!(join(&env, &applicant, 2), Err(ContractError::InvalidInput));
+                assert_eq!(join(&env, &applicant, 2), Err(ContractError::GrantNotFound));
             });
         }
 
